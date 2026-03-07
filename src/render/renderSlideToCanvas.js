@@ -3,6 +3,7 @@ import { clamp, ensureArray } from "../utils/object.js";
 import {
   buildGeometryVars,
   evalGeomFormula,
+  resolveGeometryGuides,
   resolveOoxmlArcFromCurrentPoint,
   splitArcSweep
 } from "../utils/geometry.js";
@@ -506,7 +507,7 @@ function drawCustomGeometry(ctx, element, box, scaleX, scaleY) {
   return drew;
 }
 
-function presetAdjustValue(element, name, fallbackValue) {
+function presetAdjustValue(element, name, fallbackValue, min = 0, max = 100000) {
   const gd = ensureArray(element?.geometry?.adjustValues).find((entry) => String(entry?.name || "").toLowerCase() === String(name || "").toLowerCase());
   const formula = String(gd?.fmla || "").trim();
   if (!formula) {
@@ -516,7 +517,7 @@ function presetAdjustValue(element, name, fallbackValue) {
   if (!match) {
     return fallbackValue;
   }
-  return clamp(Number.parseInt(match[1], 10), 0, 100000);
+  return clamp(Number.parseInt(match[1], 10), min, max);
 }
 
 function trianglePoints(box, element) {
@@ -526,6 +527,106 @@ function trianglePoints(box, element) {
     { x: box.x + box.cx, y: box.y + box.cy },
     { x: box.x, y: box.y + box.cy }
   ];
+}
+
+const PRESET_WEDGE_RECT_CALLOUT_ADJUSTS = [
+  { name: "adj1", fmla: "val -20833" },
+  { name: "adj2", fmla: "val 62500" }
+];
+
+const PRESET_WEDGE_RECT_CALLOUT_GUIDES = [
+  { name: "dxPos", fmla: "*/ w adj1 100000" },
+  { name: "dyPos", fmla: "*/ h adj2 100000" },
+  { name: "xPos", fmla: "+- hc dxPos 0" },
+  { name: "yPos", fmla: "+- vc dyPos 0" },
+  { name: "dx", fmla: "+- xPos 0 hc" },
+  { name: "dy", fmla: "+- yPos 0 vc" },
+  { name: "dq", fmla: "*/ dxPos h w" },
+  { name: "ady", fmla: "abs dyPos" },
+  { name: "adq", fmla: "abs dq" },
+  { name: "dz", fmla: "+- ady 0 adq" },
+  { name: "xg1", fmla: "?: dxPos 7 2" },
+  { name: "xg2", fmla: "?: dxPos 10 5" },
+  { name: "x1", fmla: "*/ w xg1 12" },
+  { name: "x2", fmla: "*/ w xg2 12" },
+  { name: "yg1", fmla: "?: dyPos 7 2" },
+  { name: "yg2", fmla: "?: dyPos 10 5" },
+  { name: "y1", fmla: "*/ h yg1 12" },
+  { name: "y2", fmla: "*/ h yg2 12" },
+  { name: "t1", fmla: "?: dxPos l xPos" },
+  { name: "xl", fmla: "?: dz l t1" },
+  { name: "t2", fmla: "?: dyPos x1 xPos" },
+  { name: "xt", fmla: "?: dz t2 x1" },
+  { name: "t3", fmla: "?: dxPos xPos r" },
+  { name: "xr", fmla: "?: dz r t3" },
+  { name: "t4", fmla: "?: dyPos xPos x1" },
+  { name: "xb", fmla: "?: dz t4 x1" },
+  { name: "t5", fmla: "?: dxPos y1 yPos" },
+  { name: "yl", fmla: "?: dz y1 t5" },
+  { name: "t6", fmla: "?: dyPos t yPos" },
+  { name: "yt", fmla: "?: dz t6 t" },
+  { name: "t7", fmla: "?: dxPos yPos y1" },
+  { name: "yr", fmla: "?: dz y1 t7" },
+  { name: "t8", fmla: "?: dyPos yPos b" },
+  { name: "yb", fmla: "?: dz t8 b" }
+];
+
+function mergePresetAdjustValues(defaults, overrides) {
+  const overrideMap = new Map(
+    ensureArray(overrides)
+      .filter((entry) => entry?.name)
+      .map((entry) => [String(entry.name), entry])
+  );
+  return defaults.map((entry) => overrideMap.get(entry.name) || entry);
+}
+
+function resolvePresetGuideVars(box, defaultAdjusts, guideValues, element) {
+  const vars = {
+    w: box.cx,
+    h: box.cy,
+    l: 0,
+    t: 0,
+    r: box.cx,
+    b: box.cy,
+    hc: box.cx / 2,
+    vc: box.cy / 2
+  };
+  const mergedAdjusts = mergePresetAdjustValues(defaultAdjusts, element?.geometry?.adjustValues);
+  const withAdjusts = resolveGeometryGuides(mergedAdjusts, vars);
+  return resolveGeometryGuides(guideValues, withAdjusts);
+}
+
+function setPathForWedgeRectCallout(ctx, box, element) {
+  const vars = resolvePresetGuideVars(
+    box,
+    PRESET_WEDGE_RECT_CALLOUT_ADJUSTS,
+    PRESET_WEDGE_RECT_CALLOUT_GUIDES,
+    element
+  );
+  const points = [
+    { x: vars.l, y: vars.t },
+    { x: vars.x1, y: vars.t },
+    { x: vars.xt, y: vars.yt },
+    { x: vars.x2, y: vars.t },
+    { x: vars.r, y: vars.t },
+    { x: vars.r, y: vars.y1 },
+    { x: vars.xr, y: vars.yr },
+    { x: vars.r, y: vars.y2 },
+    { x: vars.r, y: vars.b },
+    { x: vars.x2, y: vars.b },
+    { x: vars.xb, y: vars.yb },
+    { x: vars.x1, y: vars.b },
+    { x: vars.l, y: vars.b },
+    { x: vars.l, y: vars.y2 },
+    { x: vars.xl, y: vars.yl },
+    { x: vars.l, y: vars.y1 }
+  ];
+
+  ctx.moveTo(box.x + points[0].x, box.y + points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(box.x + points[i].x, box.y + points[i].y);
+  }
+  ctx.closePath();
 }
 
 function setPathForShape(ctx, shapeType, box, element = null) {
@@ -628,6 +729,10 @@ function setPathForShape(ctx, shapeType, box, element = null) {
       ]);
       break;
     }
+    case "wedgerectcallout": {
+      setPathForWedgeRectCallout(ctx, box, element);
+      break;
+    }
     case "line":
     case "straightconnector1":
     case "bentconnector2":
@@ -695,9 +800,26 @@ function drawLineElement(ctx, element, scaleX, scaleY) {
   drawLineSegment(ctx, box, element.line, scaleX, scaleY);
 }
 
+const FONT_FAMILY_ALIASES = new Map([
+  ["ＭＳ Ｐゴシック", "MS PGothic"],
+  ["ＭＳ ゴシック", "MS Gothic"],
+  ["ＭＳ Ｐ明朝", "MS PMincho"],
+  ["ＭＳ 明朝", "MS Mincho"]
+]);
+
+function normalizeFontFamilyName(name) {
+  const normalized = String(name || "").trim();
+  if (!normalized) {
+    return null;
+  }
+  return FONT_FAMILY_ALIASES.get(normalized) || normalized;
+}
+
 function normalizeRunStyle(style = {}, defaultStyle = {}) {
   return {
-    fontFamily: style.fontFamily || defaultStyle.fontFamily || "Calibri",
+    fontFamily: normalizeFontFamilyName(style.fontFamily || defaultStyle.fontFamily || "Calibri"),
+    eastAsiaFont: normalizeFontFamilyName(style.eastAsiaFont || defaultStyle.eastAsiaFont || null),
+    complexScriptFont: normalizeFontFamilyName(style.complexScriptFont || defaultStyle.complexScriptFont || null),
     fontSizePt: style.fontSizePt || defaultStyle.fontSizePt || 18,
     bold: style.bold || false,
     italic: style.italic || false,
@@ -709,7 +831,18 @@ function normalizeRunStyle(style = {}, defaultStyle = {}) {
 }
 
 function styleKey(style) {
-  return `${style.fontFamily}|${style.fontSizePt}|${style.bold ? 1 : 0}|${style.italic ? 1 : 0}|${style.color}|${style.alpha}|${style.underline ? 1 : 0}|${style.spacing ?? 0}`;
+  return [
+    style.fontFamily,
+    style.eastAsiaFont,
+    style.complexScriptFont,
+    style.fontSizePt,
+    style.bold ? 1 : 0,
+    style.italic ? 1 : 0,
+    style.color,
+    style.alpha,
+    style.underline ? 1 : 0,
+    style.spacing ?? 0
+  ].join("|");
 }
 
 function charSpacingPx(style) {
@@ -756,8 +889,12 @@ function setCanvasFont(ctx, style) {
   const families = [
     quoteFontFamily(style.fontFamily || "Calibri"),
     quoteFontFamily(style.eastAsiaFont || ""),
+    quoteFontFamily(style.complexScriptFont || ""),
     "\"Yu Gothic UI\"",
+    "\"Yu Gothic\"",
+    "\"Meiryo UI\"",
     "Meiryo",
+    "\"MS PGothic\"",
     "\"MS Gothic\"",
     "sans-serif"
   ].filter(Boolean).join(", ");
@@ -766,10 +903,20 @@ function setCanvasFont(ctx, style) {
   return sizePx;
 }
 
+function measureStyledTextWidth(ctx, text, style) {
+  if (!text) {
+    return 0;
+  }
+  setCanvasFont(ctx, style);
+  const glyphCount = Array.from(text).length;
+  return ctx.measureText(text).width + Math.max(0, glyphCount - 1) * charSpacingPx(style);
+}
+
 function pushTextSegment(line, text, style, width) {
   if (!text) {
     return;
   }
+  line.explicitBreak = false;
   const key = styleKey(style);
   const last = line.segments[line.segments.length - 1];
   if ((style.spacing ?? 0) === 0 && last && last.key === key) {
@@ -789,12 +936,14 @@ function newLine(paragraph) {
     maxAscent: 0,
     maxDescent: 0,
     alignment: paragraph?.alignment || "l",
-    lineSpacing: paragraph?.lineSpacing || 0
+    lineSpacing: paragraph?.lineSpacing || 0,
+    lineSpacingPt: paragraph?.lineSpacingPt || 0,
+    explicitBreak: false
   };
 }
 
-function flushLine(lines, line) {
-  if (line.segments.length) {
+function flushLine(lines, line, allowEmpty = false) {
+  if (line.segments.length || allowEmpty) {
     lines.push(line);
   }
 }
@@ -803,13 +952,27 @@ function lineDisplayWidth(line) {
   if (!line?.segments?.length) {
     return 0;
   }
-  const last = line.segments[line.segments.length - 1];
-  return Math.max(0, line.width - charSpacingPx(last.style));
+  return Math.max(0, line.width);
+}
+
+function finalizeLineMeasurements(ctx, line) {
+  if (!line?.segments?.length) {
+    line.width = 0;
+    return line;
+  }
+  let width = 0;
+  for (const seg of line.segments) {
+    seg.width = measureStyledTextWidth(ctx, seg.text, seg.style);
+    width += seg.width;
+  }
+  line.width = width;
+  return line;
 }
 
 function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle) {
   const lines = [];
   let line = newLine(paragraph);
+  let hadVisibleText = false;
 
   for (const run of ensureArray(paragraph?.runs)) {
     const style = normalizeRunStyle(run.style || {}, defaultStyle);
@@ -823,14 +986,17 @@ function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle) {
     const text = String(run.text || "");
     for (const ch of Array.from(text)) {
       if (ch === "\n") {
-        flushLine(lines, line);
+        line.explicitBreak = true;
+        flushLine(lines, line, true);
         line = newLine(paragraph);
         line.maxFontSizePx = Math.max(line.maxFontSizePx, fontPx);
         line.maxAscent = Math.max(line.maxAscent, metrics.ascent);
         line.maxDescent = Math.max(line.maxDescent, metrics.descent);
+        line.explicitBreak = true;
         continue;
       }
 
+      hadVisibleText = true;
       const width = ctx.measureText(ch).width + charSpacingPx(style);
       if (line.width + width > boxWidthPx && line.segments.length) {
         flushLine(lines, line);
@@ -843,12 +1009,21 @@ function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle) {
     }
   }
 
-  flushLine(lines, line);
+  if (!hadVisibleText && !line.segments.length) {
+    line.explicitBreak = true;
+  }
+  flushLine(lines, line, line.explicitBreak);
+  for (const item of lines) {
+    finalizeLineMeasurements(ctx, item);
+  }
   return lines;
 }
 
 function lineHeightPx(line) {
-  const natural = Math.max(line.maxAscent + line.maxDescent, line.maxFontSizePx || 0);
+  const natural = Math.max(line.maxAscent + line.maxDescent, (line.maxFontSizePx || 0) * 1.05);
+  if (line.lineSpacingPt) {
+    return Math.max(natural, line.lineSpacingPt * PX_PER_PT);
+  }
   const spacing = line.lineSpacing ? Math.max(1, line.lineSpacing / 100000) : 1;
   return natural * spacing;
 }
@@ -876,10 +1051,88 @@ function verticalAnchorStartY(top, height, contentHeight, anchor) {
 function normalizeBulletChar(bullet) {
   const char = bullet?.char || "\u2022";
   const font = String(bullet?.fontFamily || "").toLowerCase();
-  if (font.includes("wingdings") && /[\uF000-\uF0FF]/.test(char)) {
-    return "\u25B6";
+  if (font.includes("wingdings")) {
+    if (char === "l") {
+      return "\u25cf";
+    }
+    if (/[\uF000-\uF0FF]/.test(char)) {
+      return "\u2022";
+    }
+  }
+  if (!font.includes("wingdings") && /[\uF000-\uF0FF]/.test(char)) {
+    return "\u2022";
   }
   return char;
+}
+
+function mappedBulletSizeScale(bullet, bulletChar) {
+  const font = String(bullet?.fontFamily || "").toLowerCase();
+  if (font.includes("wingdings") && bulletChar === "\u25cf") {
+    return 0.72;
+  }
+  return 1;
+}
+
+function toAlphaSequence(index, upper = false) {
+  let value = Math.max(1, index);
+  let out = "";
+  while (value > 0) {
+    value -= 1;
+    out = String.fromCharCode(97 + (value % 26)) + out;
+    value = Math.floor(value / 26);
+  }
+  return upper ? out.toUpperCase() : out;
+}
+
+function toRoman(index, upper = false) {
+  const numerals = [
+    [1000, "m"],
+    [900, "cm"],
+    [500, "d"],
+    [400, "cd"],
+    [100, "c"],
+    [90, "xc"],
+    [50, "l"],
+    [40, "xl"],
+    [10, "x"],
+    [9, "ix"],
+    [5, "v"],
+    [4, "iv"],
+    [1, "i"]
+  ];
+  let value = Math.max(1, index);
+  let out = "";
+  for (const [n, token] of numerals) {
+    while (value >= n) {
+      out += token;
+      value -= n;
+    }
+  }
+  return upper ? out.toUpperCase() : out;
+}
+
+function formatAutoNumber(bullet, index) {
+  const value = Math.max(1, index);
+  switch (String(bullet?.format || "arabicPeriod")) {
+    case "arabicParenBoth":
+      return `(${value})`;
+    case "arabicParenR":
+      return `${value})`;
+    case "alphaLcPeriod":
+      return `${toAlphaSequence(value, false)}.`;
+    case "alphaLcParenR":
+      return `${toAlphaSequence(value, false)})`;
+    case "alphaUcPeriod":
+      return `${toAlphaSequence(value, true)}.`;
+    case "alphaUcParenR":
+      return `${toAlphaSequence(value, true)})`;
+    case "romanLcPeriod":
+      return `${toRoman(value, false)}.`;
+    case "romanUcPeriod":
+      return `${toRoman(value, true)}.`;
+    default:
+      return `${value}.`;
+  }
 }
 
 function buildVerticalGlyphs(ctx, textBody, defaultStyle) {
@@ -964,6 +1217,8 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
 
   const defaultStyle = {
     fontFamily: "Calibri",
+    eastAsiaFont: null,
+    complexScriptFont: null,
     fontSizePt: 18,
     color: "#000000",
     alpha: 1,
@@ -979,6 +1234,7 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
 
   const paragraphLayouts = [];
   let totalHeight = 0;
+  const autoNumberState = new Map();
 
   for (const paragraph of ensureArray(textBody.paragraphs)) {
     const before = Math.max(0, (paragraph.spaceBefore || 0) / 100) * PX_PER_PT;
@@ -991,6 +1247,16 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
     if (!lines.length) {
       continue;
     }
+    const hasVisibleText = ensureArray(paragraph.runs).some((run) => String(run?.text || "").trim().length > 0);
+    let bulletLabel = null;
+    if (paragraph.bullet?.type === "autoNum" && hasVisibleText) {
+      const key = `${paragraph.level || 0}|${paragraph.bullet.format || "arabicPeriod"}|${paragraph.bullet.startAt || 1}`;
+      const current = autoNumberState.has(key)
+        ? autoNumberState.get(key)
+        : (paragraph.bullet.startAt || 1);
+      bulletLabel = formatAutoNumber(paragraph.bullet, current);
+      autoNumberState.set(key, current + 1);
+    }
     const heights = lines.map((line) => lineHeightPx(line));
     const paraHeight = before + heights.reduce((sum, h) => sum + h, 0) + after;
     paragraphLayouts.push({
@@ -1001,7 +1267,8 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
       marginLeft,
       marginRight,
       indent,
-      bullet: paragraph.bullet || null
+      bullet: paragraph.bullet || null,
+      bulletLabel
     });
     totalHeight += paraHeight;
   }
@@ -1029,18 +1296,30 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
       const paragraphWidth = Math.max(0, width - layout.marginLeft - layout.marginRight);
       const startX = alignmentToStartX(paragraphLeft, paragraphWidth, lineDisplayWidth(line), line.alignment);
 
-      if (li === 0 && layout.bullet?.type === "char") {
+      if (li === 0 && (layout.bullet?.type === "char" || layout.bulletLabel)) {
         const baseStyle = line.segments[0]?.style || defaultStyle;
+        const bulletChar = layout.bullet?.type === "char"
+          ? normalizeBulletChar(layout.bullet)
+          : null;
+        const useMappedBulletFont = Boolean(
+          layout.bullet?.type === "char"
+          && bulletChar
+          && bulletChar !== (layout.bullet?.char || "\u2022")
+        );
         const bulletStyle = {
           ...baseStyle,
-          fontFamily: layout.bullet.fontFamily || baseStyle.fontFamily,
-          color: layout.bullet.color || baseStyle.color,
-          alpha: layout.bullet.alpha ?? baseStyle.alpha,
-          fontSizePt: layout.bullet.sizePt || (baseStyle.fontSizePt * (layout.bullet.sizePct || 1))
+          fontFamily: useMappedBulletFont ? baseStyle.fontFamily : (layout.bullet?.fontFamily || baseStyle.fontFamily),
+          eastAsiaFont: useMappedBulletFont ? baseStyle.eastAsiaFont : (layout.bullet?.fontFamily ? null : baseStyle.eastAsiaFont),
+          complexScriptFont: useMappedBulletFont ? baseStyle.complexScriptFont : (layout.bullet?.fontFamily ? null : baseStyle.complexScriptFont),
+          color: layout.bullet?.color || baseStyle.color,
+          alpha: layout.bullet?.alpha ?? baseStyle.alpha,
+          fontSizePt: (layout.bullet?.sizePt || (baseStyle.fontSizePt * (layout.bullet?.sizePct || 1)))
+            * mappedBulletSizeScale(layout.bullet, bulletChar)
         };
         setCanvasFont(ctx, bulletStyle);
         ctx.textBaseline = "alphabetic";
-        ctx.fillText(normalizeBulletChar(layout.bullet), paragraphLeft + Math.min(0, layout.indent), baselineY);
+        const bulletText = layout.bullet?.type === "char" ? bulletChar : layout.bulletLabel;
+        ctx.fillText(bulletText, paragraphLeft + Math.min(0, layout.indent), baselineY);
       }
 
       let x = startX;
@@ -1159,18 +1438,59 @@ async function drawSlideBackground(ctx, slide, widthPx, heightPx) {
   }
 }
 
-function drawTableCellText(ctx, cell, x, y, width, height) {
+function drawTableCellText(ctx, cell, x, y, width, height, scaleX, scaleY) {
   if (!cell?.text) {
     return;
   }
   const textBody = {
     ...cell.text,
-    leftInset: cell.marginLeft || 2,
-    rightInset: cell.marginRight || 2,
-    topInset: cell.marginTop || 1,
-    bottomInset: cell.marginBottom || 1
+    paragraphs: ensureArray(cell.text.paragraphs).map((paragraph) => ({
+      ...paragraph,
+      marginLeft: (paragraph.marginLeft || 0) * scaleX,
+      marginRight: (paragraph.marginRight || 0) * scaleX,
+      indent: (paragraph.indent || 0) * scaleX
+    })),
+    verticalAlign: cell.verticalAlign || cell.text.verticalAlign,
+    leftInset: ((cell.text.leftInset || 0) + (cell.marginLeft || 0)) * scaleX,
+    rightInset: ((cell.text.rightInset || 0) + (cell.marginRight || 0)) * scaleX,
+    topInset: ((cell.text.topInset || 0) + (cell.marginTop || 0)) * scaleY,
+    bottomInset: ((cell.text.bottomInset || 0) + (cell.marginBottom || 0)) * scaleY
   };
   drawTextBodyInBox(ctx, textBody, { x, y, cx: width, cy: height });
+}
+
+function drawTableCellBorder(ctx, side, border, x, y, width, height, scaleX, scaleY) {
+  if (!border?.color || !border?.width) {
+    return;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = toCanvasColor(border.color, border.alpha ?? 1);
+  ctx.lineWidth = Math.max(0.75, lineWidthToPx(border.width, scaleX, scaleY));
+  ctx.lineCap = "butt";
+  ctx.beginPath();
+  switch (side) {
+    case "left":
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y + height);
+      break;
+    case "right":
+      ctx.moveTo(x + width, y);
+      ctx.lineTo(x + width, y + height);
+      break;
+    case "top":
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width, y);
+      break;
+    case "bottom":
+      ctx.moveTo(x, y + height);
+      ctx.lineTo(x + width, y + height);
+      break;
+    default:
+      break;
+  }
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawTable(ctx, element, scaleX, scaleY) {
@@ -1179,29 +1499,40 @@ function drawTable(ctx, element, scaleX, scaleY) {
   withElementTransform(ctx, box, () => {
     const totalWidth = element.gridCols.reduce((sum, width) => sum + width, 0) || element.cx;
     const widthScale = totalWidth ? box.cx / totalWidth : 1;
+    const rowHeights = element.rows.map((row) => row.height || (element.rows.length ? element.cy / element.rows.length : element.cy));
 
     let y = box.y;
-    for (const row of element.rows) {
-      const rowHeight = (row.height || (element.rows.length ? element.cy / element.rows.length : element.cy)) * scaleY;
+    for (let ri = 0; ri < element.rows.length; ri += 1) {
+      const row = element.rows[ri];
+      const rowHeight = rowHeights[ri] * scaleY;
       let x = box.x;
 
       for (let ci = 0; ci < row.cells.length; ci += 1) {
         const cell = row.cells[ci];
-        const rawWidth = element.gridCols[ci] || (totalWidth / Math.max(1, row.cells.length));
+        const spanCols = Math.max(1, cell.gridSpan || 1);
+        const spanRows = Math.max(1, cell.rowSpan || 1);
+        const rawWidth = element.gridCols.slice(ci, ci + spanCols)
+          .reduce((sum, value) => sum + value, 0) || (totalWidth / Math.max(1, row.cells.length));
+        const rawHeight = rowHeights.slice(ri, ri + spanRows)
+          .reduce((sum, value) => sum + value, 0) || rowHeights[ri];
         const cellWidth = rawWidth * widthScale;
+        const cellHeight = rawHeight * scaleY;
 
-        ctx.fillStyle = toCanvasColor(cell.fill?.color || "#FFFFFF", cell.fill?.alpha ?? 1);
-        ctx.fillRect(x, y, cellWidth, rowHeight);
-
-        const border = cell.borders?.left || cell.borders?.top || cell.borders?.right || cell.borders?.bottom;
-        if (border?.color) {
-          ctx.strokeStyle = toCanvasColor(border.color, border.alpha ?? 1);
-          ctx.lineWidth = Math.max(0.5, lineWidthToPx(border.width || 12700, scaleX, scaleY));
-          ctx.strokeRect(x, y, cellWidth, rowHeight);
+        if (cell.hMerge || cell.vMerge) {
+          x += (element.gridCols[ci] || 0) * widthScale;
+          continue;
         }
 
-        drawTableCellText(ctx, cell, x, y, cellWidth, rowHeight);
+        ctx.fillStyle = toCanvasColor(cell.fill?.color || "#FFFFFF", cell.fill?.alpha ?? 1);
+        ctx.fillRect(x, y, cellWidth, cellHeight);
+
+        for (const side of ["left", "right", "top", "bottom"]) {
+          drawTableCellBorder(ctx, side, cell.borders?.[side], x, y, cellWidth, cellHeight, scaleX, scaleY);
+        }
+
+        drawTableCellText(ctx, cell, x, y, cellWidth, cellHeight, scaleX, scaleY);
         x += cellWidth;
+        ci += spanCols - 1;
       }
 
       y += rowHeight;

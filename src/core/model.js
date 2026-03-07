@@ -32,7 +32,8 @@ function normalizeBool(value) {
   if (value === undefined || value === null) {
     return false;
   }
-  return value === true || value === "1" || String(value).toLowerCase() === "true";
+  const normalized = String(value).toLowerCase();
+  return value === true || value === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
 }
 
 function hasNode(node, key) {
@@ -498,6 +499,7 @@ function parseRunStyle(rPrNode, themeContext, fallbackColor, fallbackFont, defau
     spacing: toInt(merged?.["@_spc"], 0),
     lang,
     color,
+    explicitColor: hasSolidFill,
     alpha: resolveDrawingColor(merged?.["a:solidFill"], themeContext)?.alpha ?? 1,
     fontFamily: preferredFont,
     eastAsiaFont: resolvedEa || null,
@@ -519,6 +521,15 @@ function parseParagraphBullet(pPrNode, themeContext) {
     return null;
   }
 
+  if (hasNode(pPrNode, "a:buAutoNum")) {
+    const auto = first(pPrNode?.["a:buAutoNum"]) || {};
+    return {
+      type: "autoNum",
+      format: auto?.["@_type"] || "arabicPeriod",
+      startAt: toInt(auto?.["@_startAt"], 1)
+    };
+  }
+
   const buCharNode = first(pPrNode?.["a:buChar"]);
   if (buCharNode) {
     const buClrNode = first(pPrNode?.["a:buClr"]);
@@ -537,16 +548,39 @@ function parseParagraphBullet(pPrNode, themeContext) {
     };
   }
 
-  if (hasNode(pPrNode, "a:buAutoNum")) {
-    const auto = first(pPrNode?.["a:buAutoNum"]) || {};
-    return {
-      type: "autoNum",
-      format: auto?.["@_type"] || "arabicPeriod",
-      startAt: toInt(auto?.["@_startAt"], 1)
-    };
-  }
-
   return null;
+}
+
+function parseBreakRuns(
+  paragraphNode,
+  themeContext,
+  defaultColor,
+  defaultFont,
+  paragraphDefaultRPr,
+  endRPr
+) {
+  return ensureArray(paragraphNode?.["a:br"]).map((brNode) => ({
+    text: "\n",
+    style: parseRunStyle(brNode?.["a:rPr"] || endRPr, themeContext, defaultColor, defaultFont, paragraphDefaultRPr)
+  }));
+}
+
+function insertBreakRuns(runs, breakRuns) {
+  if (!breakRuns.length) {
+    return runs;
+  }
+  if (!runs.length) {
+    return [...breakRuns];
+  }
+  if (runs.length === 1) {
+    return [...runs, ...breakRuns];
+  }
+  const insertIndex = Math.max(1, runs.length - 1);
+  return [
+    ...runs.slice(0, insertIndex),
+    ...breakRuns,
+    ...runs.slice(insertIndex)
+  ];
 }
 
 function parseTextParagraph(
@@ -596,6 +630,16 @@ function parseTextParagraph(
     });
   }
 
+  const breakRuns = parseBreakRuns(
+    paragraphNode,
+    themeContext,
+    defaultColor,
+    defaultFont,
+    paraDefaultRPr,
+    endRPr
+  );
+  const runsWithBreaks = insertBreakRuns(runs, breakRuns);
+
   return {
     alignment: pPr?.["@_algn"] || "l",
     level: toInt(pPr?.["@_lvl"], 0),
@@ -610,8 +654,9 @@ function parseTextParagraph(
     spaceBefore: toInt(pPr?.["a:spcBef"]?.["a:spcPts"]?.["@_val"], 0),
     spaceAfter: toInt(pPr?.["a:spcAft"]?.["a:spcPts"]?.["@_val"], 0),
     lineSpacing: toInt(pPr?.["a:lnSpc"]?.["a:spcPct"]?.["@_val"], 0),
+    lineSpacingPt: centipointsToPt(toInt(pPr?.["a:lnSpc"]?.["a:spcPts"]?.["@_val"], 0)),
     bullet: parseParagraphBullet(pPr, themeContext),
-    runs
+    runs: runsWithBreaks
   };
 }
 
@@ -852,7 +897,7 @@ function parseShapeElement(shapeNode, inheritedShapeNode, themeContext, masterTe
     ? themeContext?.theme?.fontScheme?.major?.latin
     : themeContext?.theme?.fontScheme?.minor?.latin;
   const text = parseTextBody(effectiveTxBody, themeContext, {
-    color: fontRefColor || common.fill?.color || "#000000",
+    color: fontRefColor || "#000000",
     fontFamily: fontFromRef || themeContext?.theme?.fontScheme?.minor?.latin || "Calibri"
   }, textStyleFallback);
 
@@ -950,12 +995,19 @@ function parsePictureElement(picNode, relsMap, slidePath, packageModel, contentT
 
 function parseTableCell(cellNode, themeContext, fallbackFill) {
   const tcPr = cellNode?.["a:tcPr"] || {};
-  const fill = resolveFill(tcPr, null, themeContext) || fallbackFill || {
+  const explicitFill = resolveFill(tcPr, null, themeContext);
+  const fill = explicitFill || fallbackFill || {
     type: "solid",
     color: "#FFFFFF",
     alpha: 1
   };
 
+  const explicitBorderNodes = {
+    left: Boolean(tcPr?.["a:lnL"]),
+    right: Boolean(tcPr?.["a:lnR"]),
+    top: Boolean(tcPr?.["a:lnT"]),
+    bottom: Boolean(tcPr?.["a:lnB"])
+  };
   const borders = {
     left: resolveLine(tcPr?.["a:lnL"] ? { "a:ln": tcPr["a:lnL"] } : null, null, themeContext),
     right: resolveLine(tcPr?.["a:lnR"] ? { "a:ln": tcPr["a:lnR"] } : null, null, themeContext),
@@ -979,8 +1031,247 @@ function parseTableCell(cellNode, themeContext, fallbackFill) {
     gridSpan: toInt(tcPr?.["@_gridSpan"], 1),
     hMerge: normalizeBool(tcPr?.["@_hMerge"]),
     vMerge: normalizeBool(tcPr?.["@_vMerge"]),
+    _styleMeta: {
+      explicitFill: Boolean(explicitFill),
+      explicitBorders: explicitBorderNodes
+    },
     raw: deepClone(tcPr)
   };
+}
+
+function tableStyleIdFromTblPr(tblPr, tableStylesXml) {
+  const raw = tblPr?.["a:tableStyleId"];
+  if (typeof raw === "string" && raw) {
+    return raw;
+  }
+  if (raw && typeof raw === "object" && typeof raw["#text"] === "string") {
+    return raw["#text"];
+  }
+  if (typeof tblPr?.["@_tableStyleId"] === "string" && tblPr["@_tableStyleId"]) {
+    return tblPr["@_tableStyleId"];
+  }
+  return tableStylesXml?.["a:tblStyleLst"]?.["@_def"] || null;
+}
+
+function tableStyleNodeById(tableStylesXml, styleId) {
+  const styles = ensureArray(tableStylesXml?.["a:tblStyleLst"]?.["a:tblStyle"]);
+  if (!styles.length) {
+    return null;
+  }
+  if (!styleId) {
+    return first(styles) || null;
+  }
+  return styles.find((style) => style?.["@_styleId"] === styleId) || null;
+}
+
+function resolveTableStyleFill(fillNode, themeContext) {
+  if (!fillNode) {
+    return null;
+  }
+  const fillContainer = {};
+  for (const key of ["a:solidFill", "a:gradFill", "a:blipFill", "a:noFill", "a:pattFill"]) {
+    if (fillNode[key]) {
+      fillContainer[key] = fillNode[key];
+    }
+  }
+  return resolveFill(fillContainer, null, themeContext);
+}
+
+function resolveTableStyleLine(edgeNode, themeContext) {
+  if (!edgeNode?.["a:ln"]) {
+    return null;
+  }
+  return resolveLine({ "a:ln": edgeNode["a:ln"] }, null, themeContext);
+}
+
+function resolveTableTextStyle(tcTxStyle, themeContext) {
+  if (!tcTxStyle) {
+    return null;
+  }
+
+  const colorSource = {};
+  if (tcTxStyle["a:schemeClr"]) {
+    colorSource["a:schemeClr"] = tcTxStyle["a:schemeClr"];
+  }
+  if (tcTxStyle["a:srgbClr"]) {
+    colorSource["a:srgbClr"] = tcTxStyle["a:srgbClr"];
+  }
+  if (tcTxStyle["a:prstClr"]) {
+    colorSource["a:prstClr"] = tcTxStyle["a:prstClr"];
+  }
+  const color = resolveDrawingColor(colorSource, themeContext);
+  const fontRefIdx = tcTxStyle?.["a:fontRef"]?.["@_idx"] || null;
+
+  let fontFamily = null;
+  if (fontRefIdx === "minor") {
+    fontFamily = themeContext?.theme?.fontScheme?.minor?.ea
+      || themeContext?.theme?.fontScheme?.minor?.latin
+      || null;
+  } else if (fontRefIdx === "major") {
+    fontFamily = themeContext?.theme?.fontScheme?.major?.ea
+      || themeContext?.theme?.fontScheme?.major?.latin
+      || null;
+  }
+
+  return {
+    bold: normalizeBool(tcTxStyle?.["@_b"]),
+    italic: normalizeBool(tcTxStyle?.["@_i"]),
+    color: color?.color || null,
+    alpha: color?.alpha ?? 1,
+    fontFamily
+  };
+}
+
+function resolveTableStyleRegion(styleNode, regionName, themeContext) {
+  const region = styleNode?.[regionName];
+  if (!region) {
+    return null;
+  }
+
+  const tcStyle = region?.["a:tcStyle"] || {};
+  const tcBdr = tcStyle?.["a:tcBdr"] || {};
+
+  return {
+    fill: resolveTableStyleFill(tcStyle?.["a:fill"], themeContext),
+    borders: {
+      left: resolveTableStyleLine(tcBdr?.["a:left"], themeContext),
+      right: resolveTableStyleLine(tcBdr?.["a:right"], themeContext),
+      top: resolveTableStyleLine(tcBdr?.["a:top"], themeContext),
+      bottom: resolveTableStyleLine(tcBdr?.["a:bottom"], themeContext),
+      insideH: resolveTableStyleLine(tcBdr?.["a:insideH"], themeContext),
+      insideV: resolveTableStyleLine(tcBdr?.["a:insideV"], themeContext)
+    },
+    textStyle: resolveTableTextStyle(region?.["a:tcTxStyle"], themeContext)
+  };
+}
+
+function cloneStyleValue(value) {
+  return value ? deepClone(value) : value;
+}
+
+function applyTextStyleOverrides(textBody, textStyle) {
+  if (!textBody || !textStyle) {
+    return;
+  }
+  for (const paragraph of ensureArray(textBody.paragraphs)) {
+    for (const run of ensureArray(paragraph?.runs)) {
+      run.style = {
+        ...run.style,
+        bold: textStyle.bold ? true : run.style?.bold || false,
+        italic: textStyle.italic ? true : run.style?.italic || false,
+        color: run.style?.explicitColor
+          ? (run.style?.color || "#000000")
+          : (textStyle.color || run.style?.color || "#000000"),
+        alpha: run.style?.explicitColor
+          ? (run.style?.alpha ?? 1)
+          : (textStyle.alpha ?? run.style?.alpha ?? 1),
+        fontFamily: textStyle.fontFamily || run.style?.fontFamily || null,
+        eastAsiaFont: textStyle.fontFamily || run.style?.eastAsiaFont || null
+      };
+    }
+  }
+}
+
+function pickStyledBorder(regionStyle, side, rowIndex, rowCount, colIndex, colCount) {
+  if (!regionStyle?.borders) {
+    return null;
+  }
+
+  switch (side) {
+    case "left":
+      return colIndex === 0
+        ? (regionStyle.borders.left || regionStyle.borders.insideV || null)
+        : (regionStyle.borders.insideV || regionStyle.borders.left || null);
+    case "right":
+      return colIndex === colCount - 1
+        ? (regionStyle.borders.right || regionStyle.borders.insideV || null)
+        : (regionStyle.borders.insideV || regionStyle.borders.right || null);
+    case "top":
+      return rowIndex === 0
+        ? (regionStyle.borders.top || regionStyle.borders.insideH || null)
+        : (regionStyle.borders.insideH || regionStyle.borders.top || null);
+    case "bottom":
+      return rowIndex === rowCount - 1
+        ? (regionStyle.borders.bottom || regionStyle.borders.insideH || null)
+        : (regionStyle.borders.insideH || regionStyle.borders.bottom || null);
+    default:
+      return null;
+  }
+}
+
+function applyTableRegionStyle(cell, regionStyle, rowIndex, rowCount, colIndex, colCount) {
+  if (!regionStyle) {
+    return;
+  }
+
+  if (!cell?._styleMeta?.explicitFill && regionStyle.fill) {
+    cell.fill = cloneStyleValue(regionStyle.fill);
+  }
+
+  for (const side of ["left", "right", "top", "bottom"]) {
+    if (cell?._styleMeta?.explicitBorders?.[side]) {
+      continue;
+    }
+    const border = pickStyledBorder(regionStyle, side, rowIndex, rowCount, colIndex, colCount);
+    if (border) {
+      cell.borders[side] = cloneStyleValue(border);
+    }
+  }
+
+  applyTextStyleOverrides(cell.text, regionStyle.textStyle);
+}
+
+function applyResolvedTableStyle(tableModel, tableStyleNode, themeContext) {
+  if (!tableModel || !tableStyleNode) {
+    return;
+  }
+
+  const rowCount = ensureArray(tableModel.rows).length;
+  const colCount = Math.max(...ensureArray(tableModel.rows).map((row) => ensureArray(row?.cells).length), 0);
+  const regions = {
+    wholeTbl: resolveTableStyleRegion(tableStyleNode, "a:wholeTbl", themeContext),
+    firstRow: resolveTableStyleRegion(tableStyleNode, "a:firstRow", themeContext),
+    lastRow: resolveTableStyleRegion(tableStyleNode, "a:lastRow", themeContext),
+    firstCol: resolveTableStyleRegion(tableStyleNode, "a:firstCol", themeContext),
+    lastCol: resolveTableStyleRegion(tableStyleNode, "a:lastCol", themeContext),
+    band1H: resolveTableStyleRegion(tableStyleNode, "a:band1H", themeContext),
+    band2H: resolveTableStyleRegion(tableStyleNode, "a:band2H", themeContext),
+    band1V: resolveTableStyleRegion(tableStyleNode, "a:band1V", themeContext),
+    band2V: resolveTableStyleRegion(tableStyleNode, "a:band2V", themeContext)
+  };
+
+  for (let ri = 0; ri < rowCount; ri += 1) {
+    const row = tableModel.rows[ri];
+    const bodyRowIndex = ri - (tableModel.firstRow ? 1 : 0);
+    for (let ci = 0; ci < ensureArray(row?.cells).length; ci += 1) {
+      const cell = row.cells[ci];
+      applyTableRegionStyle(cell, regions.wholeTbl, ri, rowCount, ci, colCount);
+
+      if (tableModel.bandRow && bodyRowIndex >= 0) {
+        const bandRegion = bodyRowIndex % 2 === 0 ? regions.band1H : regions.band2H;
+        applyTableRegionStyle(cell, bandRegion, ri, rowCount, ci, colCount);
+      }
+      if (tableModel.bandCol) {
+        const bodyColIndex = ci - (tableModel.firstCol ? 1 : 0);
+        if (bodyColIndex >= 0) {
+          const bandRegion = bodyColIndex % 2 === 0 ? regions.band1V : regions.band2V;
+          applyTableRegionStyle(cell, bandRegion, ri, rowCount, ci, colCount);
+        }
+      }
+      if (tableModel.firstRow && ri === 0) {
+        applyTableRegionStyle(cell, regions.firstRow, ri, rowCount, ci, colCount);
+      }
+      if (tableModel.lastRow && ri === rowCount - 1) {
+        applyTableRegionStyle(cell, regions.lastRow, ri, rowCount, ci, colCount);
+      }
+      if (tableModel.firstCol && ci === 0) {
+        applyTableRegionStyle(cell, regions.firstCol, ri, rowCount, ci, colCount);
+      }
+      if (tableModel.lastCol && ci === colCount - 1) {
+        applyTableRegionStyle(cell, regions.lastCol, ri, rowCount, ci, colCount);
+      }
+    }
+  }
 }
 
 function chartTextFromRich(richNode) {
@@ -1242,7 +1533,7 @@ function parseDiagramElement(graphicFrameNode, themeContext, relsMap, partPath, 
   };
 }
 
-function parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, packageModel) {
+function parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, packageModel, tableStylesXml = null) {
   const cNvPr = graphicFrameNode?.["p:nvGraphicFramePr"]?.["p:cNvPr"] || {};
   const xfrm = graphicFrameNode?.["p:xfrm"] || {};
   const transform = parseTransform(xfrm);
@@ -1260,8 +1551,9 @@ function parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, pa
   }));
 
   const tblPr = table?.["a:tblPr"] || {};
+  const styleId = tableStyleIdFromTblPr(tblPr, tableStylesXml);
 
-  return {
+  const tableModel = {
     id: String(cNvPr?.["@_id"] || "0"),
     name: cNvPr?.["@_name"] || "",
     description: cNvPr?.["@_descr"] || "",
@@ -1274,7 +1566,7 @@ function parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, pa
     rotation: transform.rotation,
     flipH: transform.flipH,
     flipV: transform.flipV,
-    styleId: tblPr?.["@_tableStyleId"] || null,
+    styleId,
     firstRow: normalizeBool(tblPr?.["@_firstRow"]),
     firstCol: normalizeBool(tblPr?.["@_firstCol"]),
     lastRow: normalizeBool(tblPr?.["@_lastRow"]),
@@ -1288,6 +1580,11 @@ function parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, pa
     text: null,
     raw: deepClone(graphicFrameNode)
   };
+
+  const tableStyleNode = tableStyleNodeById(tableStylesXml, styleId);
+  applyResolvedTableStyle(tableModel, tableStyleNode, themeContext);
+
+  return tableModel;
 }
 function resolveGradientFirstColor(gradFillNode, themeContext) {
   const stops = ensureArray(gradFillNode?.["a:gsLst"]?.["a:gs"]);
@@ -1657,6 +1954,7 @@ function parseOrderedTreeChildren(
   partPath,
   packageModel,
   contentTypes,
+  tableStylesXml,
   sourceLayer,
   pushElement
 ) {
@@ -1691,7 +1989,14 @@ function parseOrderedTreeChildren(
       }
       case "p:graphicFrame": {
         for (const graphicFrameNode of ensureArray(treeNode[key])) {
-          const table = parseTableElement(graphicFrameNode, themeContext, relsMap, partPath, packageModel);
+          const table = parseTableElement(
+            graphicFrameNode,
+            themeContext,
+            relsMap,
+            partPath,
+            packageModel,
+            tableStylesXml
+          );
           if (table) {
             table.sourceLayer = sourceLayer;
             pushElement(table);
@@ -1712,6 +2017,7 @@ function parseGroupTreeElements(
   partPath,
   packageModel,
   contentTypes,
+  tableStylesXml,
   sourceLayer,
   parentTransform
 ) {
@@ -1726,6 +2032,7 @@ function parseGroupTreeElements(
     partPath,
     packageModel,
     contentTypes,
+    tableStylesXml,
     sourceLayer,
     (element) => {
       elements.push(applyGroupTransformToElement(element, aggregate));
@@ -1741,6 +2048,7 @@ function parseGroupTreeElements(
         partPath,
         packageModel,
         contentTypes,
+        tableStylesXml,
         sourceLayer,
         aggregate
       )
@@ -1872,6 +2180,7 @@ function parseDecorativeTreeElements(
   partPath,
   packageModel,
   contentTypes,
+  tableStylesXml,
   sourceLayer
 ) {
   const elements = [];
@@ -1884,6 +2193,7 @@ function parseDecorativeTreeElements(
     partPath,
     packageModel,
     contentTypes,
+    tableStylesXml,
     sourceLayer,
     (element) => {
       elements.push(element);
@@ -1899,6 +2209,7 @@ function parseDecorativeTreeElements(
         partPath,
         packageModel,
         contentTypes,
+        tableStylesXml,
         sourceLayer,
         identity
       )
@@ -1921,6 +2232,9 @@ export async function parsePresentationModel(openXmlPackage) {
   const presentationGraph = await buildPresentationGraph(openXmlPackage);
   const contentTypesXml = await openXmlPackage.readXml("[Content_Types].xml");
   const contentTypes = contentTypeMap(contentTypesXml);
+  const tableStylesXml = openXmlPackage.hasPart("ppt/tableStyles.xml")
+    ? await openXmlPackage.readXml("ppt/tableStyles.xml").catch(() => null)
+    : null;
 
   const presentationRoot = presentationGraph.presentationRoot || {};
   const slideSizeNode = presentationRoot?.["p:sldSz"] || {};
@@ -1999,6 +2313,7 @@ export async function parsePresentationModel(openXmlPackage) {
           masterPath,
           openXmlPackage,
           contentTypes,
+          tableStylesXml,
           "master"
         )
       );
@@ -2012,6 +2327,7 @@ export async function parsePresentationModel(openXmlPackage) {
         layoutPath,
         openXmlPackage,
         contentTypes,
+        tableStylesXml,
         "layout"
       )
     );
@@ -2030,7 +2346,14 @@ export async function parsePresentationModel(openXmlPackage) {
     }
 
     for (const graphicFrameNode of ensureArray(slideTree?.["p:graphicFrame"])) {
-      const table = parseTableElement(graphicFrameNode, themeContext, slideRels, slidePath, openXmlPackage);
+      const table = parseTableElement(
+        graphicFrameNode,
+        themeContext,
+        slideRels,
+        slidePath,
+        openXmlPackage,
+        tableStylesXml
+      );
       if (table) {
         elements.push(table);
       } else {
@@ -2047,6 +2370,7 @@ export async function parsePresentationModel(openXmlPackage) {
           slidePath,
           openXmlPackage,
           contentTypes,
+          tableStylesXml,
           "slide-group",
           identityTransform
         )
