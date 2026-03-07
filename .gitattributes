@@ -1,0 +1,7 @@
+.history export-ignore
+.jj export-ignore
+docs export-ignore
+scripts export-ignore
+dist export-ignore
+*.pptx export-ignore
+*.pptm export-ignore

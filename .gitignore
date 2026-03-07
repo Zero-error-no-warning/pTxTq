@@ -1,0 +1,21 @@
+# Public repository scope
+.history/
+.jj/
+docs/
+scripts/
+
+# Local sample and generated assets
+*.pptx
+*.pptm
+dist/
+
+# Node and Python verification environments
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS noise
+.DS_Store
+Thumbs.db
