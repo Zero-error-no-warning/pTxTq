@@ -54,9 +54,9 @@ function rgbToHex({ r, g, b }) {
 function applyTint(rgb, tint) {
   const ratio = clamp(tint / 100000, 0, 1);
   return {
-    r: rgb.r + (255 - rgb.r) * ratio,
-    g: rgb.g + (255 - rgb.g) * ratio,
-    b: rgb.b + (255 - rgb.b) * ratio
+    r: rgb.r * ratio + 255 * (1 - ratio),
+    g: rgb.g * ratio + 255 * (1 - ratio),
+    b: rgb.b * ratio + 255 * (1 - ratio)
   };
 }
 
