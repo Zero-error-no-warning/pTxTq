@@ -1,6 +1,12 @@
 ﻿import { XMLBuilder, XMLParser } from "fast-xml-parser";
-import path from "node:path";
 import { ensureArray } from "./object.js";
+import {
+  basenamePosixPath,
+  dirnamePosixPath,
+  extnamePosixPath,
+  joinPosixPath,
+  normalizePosixPath
+} from "./posixPath.js";
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -31,9 +37,9 @@ export function buildXml(xmlObject) {
 }
 
 export function relsPartPath(partPath) {
-  const dir = path.posix.dirname(partPath);
-  const file = path.posix.basename(partPath);
-  return path.posix.join(dir, "_rels", `${file}.rels`);
+  const dir = dirnamePosixPath(partPath);
+  const file = basenamePosixPath(partPath);
+  return joinPosixPath(dir, "_rels", `${file}.rels`);
 }
 
 export function normalizePartPath(value) {
@@ -49,8 +55,8 @@ export function resolveTargetPath(partPath, target) {
     return normalizePartPath(normalizedTarget.slice(1));
   }
 
-  const baseDir = path.posix.dirname(normalizedPart);
-  return normalizePartPath(path.posix.normalize(path.posix.join(baseDir, normalizedTarget)));
+  const baseDir = dirnamePosixPath(normalizedPart);
+  return normalizePartPath(normalizePosixPath(joinPosixPath(baseDir, normalizedTarget)));
 }
 
 export function relationshipMap(relsXml) {
@@ -104,7 +110,7 @@ export function contentTypeMap(contentTypesXml) {
       if (overrideMap.has(normalized)) {
         return overrideMap.get(normalized);
       }
-      const ext = path.posix.extname(normalized).slice(1).toLowerCase();
+      const ext = extnamePosixPath(normalized).slice(1).toLowerCase();
       return defaultMap.get(ext) || null;
     },
     overrides: overrideMap,
@@ -113,7 +119,7 @@ export function contentTypeMap(contentTypesXml) {
 }
 
 export function detectImageMimeByExt(partPath) {
-  const ext = path.posix.extname(partPath).toLowerCase();
+  const ext = extnamePosixPath(partPath).toLowerCase();
   switch (ext) {
     case ".png":
       return "image/png";

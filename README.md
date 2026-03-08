@@ -1,49 +1,280 @@
-# PptxThemeDocument
+# JavaScript PPTX to Canvas / PPTX to PPTX
 
-Source-focused repository for working with editable PresentationML models extracted from `.pptx`.
+Model-based JavaScript tooling for working with PowerPoint `.pptx` files.
 
 Japanese version: [README.ja.md](./README.ja.md)
 
-## Scope
+This repository focuses on two workflows:
 
-This repository is intended to publish the implementation under `src/`.
+- `pptx -> canvas`
+- `pptx -> pptx`
 
-The following are treated as local or verification-only assets and should stay out of the public history unless there is a specific reason to publish them:
+The library reads a `.pptx` package into an editable PresentationML model, renders slides from that model, and can write the edited result back to a new `.pptx`.
 
-- `scripts/`
-- `docs/`
-- sample `.pptx` files
-- local history or workspace metadata
+## What it does
 
-## What `src/` contains
-
-- `src/core/`: package loading, theme resolution, PresentationML graph traversal, editable model
-- `src/render/`: SVG and Canvas rendering from the in-memory model
-- `src/write/`: round-trip writeback to `.pptx`
-- `src/utils/`: XML, units, color, geometry, and object helpers
-
-## Current capabilities
-
-- Load a `.pptx` package into an editable model
-- Resolve theme and slide relationships
-- Render slides to SVG
+- Load `.pptx` from a file path, `Buffer`, `Uint8Array`, or `ArrayBuffer`
+- Build an editable in-memory slide model
 - Render slides to Canvas
+- Render slides to SVG
 - Embed one slide into another as editable elements
-- Write the edited model back to `.pptx`
+- Save the modified model back to `.pptx`
+- Export the model to JSON for inspection or debugging
 
-## Public API entry point
+## Why this repo exists
 
-`src/index.js`
+This is not a screenshot-based workflow.
+
+Both rendering and write-back operate on parsed slide content, so you can:
+
+- open a PowerPoint file in JavaScript
+- inspect or modify slides
+- render them to Canvas or SVG
+- generate a new editable PowerPoint file
+
+## Public entry point
+
+The public source entry point is [`src/index.js`](./src/index.js).
+
+```js
+import { PptxThemeDocument, loadPptx } from "./src/index.js";
+```
+
+## Requirements
+
+This repository is currently source-first. The implementation lives in `src/`, so if you consume it directly in another project, install the runtime dependencies there.
+
+Required runtime dependencies:
+
+- `jszip`
+- `fast-xml-parser`
+
+Optional for Node.js Canvas rendering:
+
+- `@napi-rs/canvas` or another Canvas implementation that provides a 2D context
+
+Example:
+
+```bash
+npm install jszip fast-xml-parser
+npm install @napi-rs/canvas
+```
+
+## CDN build
+
+Build the browser bundle:
+
+```bash
+npm install
+npm run build:cdn
+```
+
+Generated files:
+
+- `dist/pTxTq.js`
+- `dist/pTxTq.min.js`
+
+The bundle is exposed as the global `pTxTq`.
+
+### Use from a script tag
+
+```html
+<script src="./dist/pTxTq.min.js"></script>
+<script>
+  async function run(file) {
+    const doc = await pTxTq.loadPptx(await file.arrayBuffer());
+    console.log(doc.slideCount);
+
+    const canvas = document.querySelector("canvas");
+    await doc.renderSlide(0, { mode: "canvas", target: canvas });
+
+    const outBytes = await doc.toPptxBuffer();
+    console.log(outBytes.byteLength);
+  }
+</script>
+```
+
+Browser bundle notes:
+
+- input should be `Blob`, `ArrayBuffer`, or `Uint8Array`
+- file path loading is not available in the browser bundle
+- `toPptxBuffer()` returns `Uint8Array` in the browser bundle
+- disk write helpers such as `saveAs()` are Node.js-only APIs
+
+## Usage
+
+Slide indices in the API are zero-based.
+
+### Load a `.pptx`
 
 ```js
 import { PptxThemeDocument } from "./src/index.js";
 
 const doc = await PptxThemeDocument.load("input.pptx");
+
+console.log(doc.slideCount);
+console.log(doc.metadata);
+
+const firstSlide = doc.getSlide(0);
+console.log(firstSlide?.name);
+```
+
+You can also load from bytes:
+
+```js
+import { readFile } from "node:fs/promises";
+import { loadPptx } from "./src/index.js";
+
+const bytes = await readFile("input.pptx");
+const doc = await loadPptx(bytes);
+```
+
+### Render `pptx -> svg`
+
+```js
+import { writeFile } from "node:fs/promises";
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load("input.pptx");
 const svg = await doc.renderSlide(0, { mode: "svg" });
+
+await writeFile("slide-1.svg", svg, "utf8");
+```
+
+### Render `pptx -> canvas` in Node.js
+
+```js
+import { writeFile } from "node:fs/promises";
+import { createCanvas } from "@napi-rs/canvas";
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load("input.pptx");
+const canvas = createCanvas(1280, 720);
+
+await doc.renderSlide(0, {
+  mode: "canvas",
+  target: canvas,
+  widthPx: 1280,
+  heightPx: 720
+});
+
+await writeFile("slide-1.png", canvas.toBuffer("image/png"));
+```
+
+If `widthPx` and `heightPx` are omitted, the renderer derives the output size from the slide size.
+
+### Render `pptx -> canvas` in the browser
+
+```js
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load(arrayBufferFromUpload);
+const canvas = document.querySelector("canvas");
+
+await doc.renderSlide(0, {
+  mode: "canvas",
+  target: canvas
+});
+```
+
+### Round-trip `pptx -> pptx`
+
+```js
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load("input.pptx");
+
 await doc.saveAs("roundtrip.pptx");
 ```
 
-## Notes
+Or get the generated bytes directly:
 
-- The source depends on `jszip` and `fast-xml-parser`.
-- Verification helpers may rely on additional Node, Python, or PowerShell tooling, but those are outside the intended public scope of this repository.
+```js
+const buffer = await doc.toPptxBuffer();
+const bytes = await doc.toPptxBuffer({ type: "uint8array" });
+```
+
+### Compose slides inside a deck
+
+`embedSlideIntoSlide()` copies one slide into another as editable model elements.
+
+```js
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load("input.pptx");
+
+doc.embedSlideIntoSlide(0, 1, {
+  x: 0,
+  y: 0,
+  cx: doc.metadata.slideSizeEmu.cx,
+  cy: doc.metadata.slideSizeEmu.cy,
+  includeBackground: true
+});
+
+await doc.saveAs("composed.pptx");
+```
+
+Useful options:
+
+- `x`, `y`, `cx`, `cy`: target placement in EMU
+- `includeBackground`: include the source slide background
+- `useRenderElements`: use render-ready elements when available
+- `includeUnsupported`: keep unsupported source element types instead of filtering them out
+
+### Export the parsed model
+
+```js
+import { PptxThemeDocument } from "./src/index.js";
+
+const doc = await PptxThemeDocument.load("input.pptx");
+
+await doc.saveModelJson("dist/model.json", {
+  includeDataUri: false,
+  includePrivate: false,
+  includeRaw: false
+});
+```
+
+You can also work with the object directly:
+
+```js
+const json = doc.toJsonObject();
+const text = doc.toJsonString({ space: 2 });
+```
+
+## API overview
+
+### `PptxThemeDocument`
+
+- `PptxThemeDocument.load(source)`
+- `PptxThemeDocument.loadFile(filePath)`
+- `doc.slideCount`
+- `doc.metadata`
+- `doc.slides`
+- `doc.getSlide(index)`
+- `doc.renderSlide(index, options)`
+- `doc.embedSlideIntoSlide(sourceIndex, targetIndex, options)`
+- `doc.toPptxPackage(options)`
+- `doc.toPptxBuffer(options)`
+- `doc.saveAs(filePath, options)`
+- `doc.toJsonObject(options)`
+- `doc.toJsonString(options)`
+- `doc.saveModelJson(filePath, options)`
+
+### `loadPptx(source)`
+
+Shortcut for:
+
+```js
+await PptxThemeDocument.load(source);
+```
+
+## Repository layout
+
+- `src/core/`: Open XML loading, theme resolution, PresentationML parsing, editable model
+- `src/render/`: Canvas and SVG renderers
+- `src/write/`: `.pptx` write-back
+- `src/utils/`: XML, units, geometry, color, and object helpers
+
+The core published implementation is under `src/`.
+Local verification assets such as `scripts/`, `docs/`, and sample decks are not the main public API.
