@@ -73,6 +73,7 @@ Generated files:
 
 - `dist/pTxTq.js`
 - `dist/pTxTq.min.js`
+- `ptxtq.min.js`
 
 The bundle is exposed as the global `pTxTq`.
 

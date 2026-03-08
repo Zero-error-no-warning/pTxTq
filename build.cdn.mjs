@@ -41,5 +41,13 @@ await build({
   outfile: path.join(outDir, "pTxTq.min.js")
 });
 
+await build({
+  ...commonOptions,
+  minify: true,
+  sourcemap: false,
+  outfile: path.join(rootDir, "ptxtq.min.js")
+});
+
 console.log(`Built ${path.join(outDir, "pTxTq.js")}`);
 console.log(`Built ${path.join(outDir, "pTxTq.min.js")}`);
+console.log(`Built ${path.join(rootDir, "ptxtq.min.js")}`);
