@@ -74,6 +74,7 @@ npm run build:cdn
 
 - `dist/pTxTq.js`
 - `dist/pTxTq.min.js`
+- `ptxtq.min.js`
 
 bundle はグローバル変数 `pTxTq` として公開されます。
 
