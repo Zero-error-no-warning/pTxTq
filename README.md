@@ -77,6 +77,8 @@ Generated files:
 
 The bundle is exposed as the global `pTxTq`.
 
+Jujutsu workflow notes: [JUJUTSU.md](./JUJUTSU.md)
+
 ### Use from a script tag
 
 ```html

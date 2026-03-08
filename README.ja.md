@@ -78,6 +78,8 @@ npm run build:cdn
 
 bundle はグローバル変数 `pTxTq` として公開されます。
 
+Jujutsu の運用メモ: [JUJUTSU.md](./JUJUTSU.md)
+
 ### script tag から使う
 
 ```html
