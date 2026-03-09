@@ -13,6 +13,7 @@ import {
 } from "./utils/xml.js";
 
 const EMBEDDABLE_TYPES = new Set(["shape", "text", "line", "image", "table"]);
+export const PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 function deepCloneValue(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -258,6 +259,17 @@ export class BrowserOpenXmlPackage {
   async toUint8Array() {
     return this.zip.generateAsync({ type: "uint8array" });
   }
+
+  async toBlob(options = {}) {
+    if (typeof Blob === "undefined") {
+      throw new Error("Blob is not available in this runtime");
+    }
+    const mimeType = typeof options === "string"
+      ? options
+      : options.mimeType || PPTX_MIME_TYPE;
+    const bytes = await this.toUint8Array();
+    return new Blob([bytes], { type: mimeType });
+  }
 }
 
 export class PptxThemeDocument {
@@ -449,7 +461,15 @@ export class PptxThemeDocument {
 
   async toPptxBuffer(options = {}) {
     const packageOut = await this.toPptxPackage(options);
+    if (options.type === "blob") {
+      return packageOut.toBlob({ mimeType: options.mimeType || PPTX_MIME_TYPE });
+    }
     return packageOut.toUint8Array();
+  }
+
+  async toPptxBlob(options = {}) {
+    const packageOut = await this.toPptxPackage(options);
+    return packageOut.toBlob({ mimeType: options.mimeType || PPTX_MIME_TYPE });
   }
 
   toJsonObject(options = {}) {
@@ -485,6 +505,7 @@ export async function loadPptx(source) {
 
 export default {
   BrowserOpenXmlPackage,
+  PPTX_MIME_TYPE,
   PptxThemeDocument,
   loadPptx
 };
