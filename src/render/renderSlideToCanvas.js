@@ -194,12 +194,12 @@ function drawLineEnd(ctx, lineEnd, tip, other, strokeStyle, lineWidthPx) {
   const py = ux;
 
   const markerLength = Math.max(
-    lineWidthPx + 2,
-    lineWidthPx * lineEndScale(lineEnd.length, 2.2, 3.2, 4.6)
+    lineWidthPx * 2,
+    lineWidthPx * lineEndScale(lineEnd.length, 2.8, 4.2, 6.2)
   );
   const markerHalfWidth = Math.max(
-    lineWidthPx * 0.6,
-    (lineWidthPx * lineEndScale(lineEnd.width, 1.6, 2.5, 3.3)) / 2
+    lineWidthPx * 0.8,
+    (lineWidthPx * lineEndScale(lineEnd.width, 2.0, 3.4, 5.0)) / 2
   );
 
   const backX = tip.x + ux * markerLength;
@@ -216,7 +216,7 @@ function drawLineEnd(ctx, lineEnd, tip, other, strokeStyle, lineWidthPx) {
 
   switch (endType) {
     case "arrow": {
-      ctx.lineWidth = Math.max(1, lineWidthPx * 0.9);
+      ctx.lineWidth = Math.max(1, lineWidthPx * lineEndScale(lineEnd.width, 0.75, 0.95, 1.1));
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       ctx.beginPath();
@@ -529,6 +529,207 @@ function trianglePoints(box, element) {
   ];
 }
 
+function pointFromRatio(box, xRatio, yRatio) {
+  return {
+    x: box.x + box.cx * xRatio,
+    y: box.y + box.cy * yRatio
+  };
+}
+
+function pointsFromRatios(box, ratios) {
+  return ratios.map(([xRatio, yRatio]) => pointFromRatio(box, xRatio, yRatio));
+}
+
+function regularPolygonPoints(box, sides, rotationDeg = -90) {
+  const cx = box.x + box.cx / 2;
+  const cy = box.y + box.cy / 2;
+  const rx = box.cx / 2;
+  const ry = box.cy / 2;
+  const start = (rotationDeg * Math.PI) / 180;
+  const points = [];
+  for (let i = 0; i < sides; i += 1) {
+    const angle = start + (i * Math.PI * 2) / sides;
+    points.push({
+      x: cx + Math.cos(angle) * rx,
+      y: cy + Math.sin(angle) * ry
+    });
+  }
+  return points;
+}
+
+function starPolygonPoints(box, points, innerRatio = 0.45, rotationDeg = -90) {
+  const cx = box.x + box.cx / 2;
+  const cy = box.y + box.cy / 2;
+  const rx = box.cx / 2;
+  const ry = box.cy / 2;
+  const start = (rotationDeg * Math.PI) / 180;
+  const clampedInner = clamp(innerRatio, 0.1, 0.95);
+  const vertices = [];
+  for (let i = 0; i < points * 2; i += 1) {
+    const angle = start + (i * Math.PI) / points;
+    const radiusRatio = i % 2 === 0 ? 1 : clampedInner;
+    vertices.push({
+      x: cx + Math.cos(angle) * rx * radiusRatio,
+      y: cy + Math.sin(angle) * ry * radiusRatio
+    });
+  }
+  return vertices;
+}
+
+function blockArrowPoints(box, direction, bodyRatio = 0.36, headRatio = 0.34) {
+  const clampedBody = clamp(bodyRatio, 0.12, 0.82);
+  const clampedHead = clamp(headRatio, 0.18, 0.75);
+  if (direction === "right") {
+    const halfBody = (box.cy * clampedBody) / 2;
+    const head = box.cx * clampedHead;
+    const bodyEnd = box.x + box.cx - head;
+    const midY = box.y + box.cy / 2;
+    return [
+      { x: box.x, y: midY - halfBody },
+      { x: bodyEnd, y: midY - halfBody },
+      { x: bodyEnd, y: box.y },
+      { x: box.x + box.cx, y: midY },
+      { x: bodyEnd, y: box.y + box.cy },
+      { x: bodyEnd, y: midY + halfBody },
+      { x: box.x, y: midY + halfBody }
+    ];
+  }
+  if (direction === "left") {
+    const halfBody = (box.cy * clampedBody) / 2;
+    const head = box.cx * clampedHead;
+    const bodyStart = box.x + head;
+    const midY = box.y + box.cy / 2;
+    return [
+      { x: box.x, y: midY },
+      { x: bodyStart, y: box.y },
+      { x: bodyStart, y: midY - halfBody },
+      { x: box.x + box.cx, y: midY - halfBody },
+      { x: box.x + box.cx, y: midY + halfBody },
+      { x: bodyStart, y: midY + halfBody },
+      { x: bodyStart, y: box.y + box.cy }
+    ];
+  }
+  if (direction === "up") {
+    const halfBody = (box.cx * clampedBody) / 2;
+    const head = box.cy * clampedHead;
+    const bodyStart = box.y + head;
+    const midX = box.x + box.cx / 2;
+    return [
+      { x: midX, y: box.y },
+      { x: box.x + box.cx, y: bodyStart },
+      { x: midX + halfBody, y: bodyStart },
+      { x: midX + halfBody, y: box.y + box.cy },
+      { x: midX - halfBody, y: box.y + box.cy },
+      { x: midX - halfBody, y: bodyStart },
+      { x: box.x, y: bodyStart }
+    ];
+  }
+
+  const halfBody = (box.cx * clampedBody) / 2;
+  const head = box.cy * clampedHead;
+  const bodyEnd = box.y + box.cy - head;
+  const midX = box.x + box.cx / 2;
+  return [
+    { x: midX - halfBody, y: box.y },
+    { x: midX + halfBody, y: box.y },
+    { x: midX + halfBody, y: bodyEnd },
+    { x: box.x + box.cx, y: bodyEnd },
+    { x: midX, y: box.y + box.cy },
+    { x: box.x, y: bodyEnd },
+    { x: midX - halfBody, y: bodyEnd }
+  ];
+}
+
+function doubleArrowPoints(box, orientation, bodyRatio = 0.32, headRatio = 0.24) {
+  const clampedBody = clamp(bodyRatio, 0.12, 0.82);
+  const clampedHead = clamp(headRatio, 0.15, 0.35);
+  if (orientation === "vertical") {
+    const halfBody = (box.cx * clampedBody) / 2;
+    const head = box.cy * clampedHead;
+    const midX = box.x + box.cx / 2;
+    const bodyTop = box.y + head;
+    const bodyBottom = box.y + box.cy - head;
+    return [
+      { x: midX, y: box.y },
+      { x: box.x + box.cx, y: bodyTop },
+      { x: midX + halfBody, y: bodyTop },
+      { x: midX + halfBody, y: bodyBottom },
+      { x: box.x + box.cx, y: bodyBottom },
+      { x: midX, y: box.y + box.cy },
+      { x: box.x, y: bodyBottom },
+      { x: midX - halfBody, y: bodyBottom },
+      { x: midX - halfBody, y: bodyTop },
+      { x: box.x, y: bodyTop }
+    ];
+  }
+
+  const halfBody = (box.cy * clampedBody) / 2;
+  const head = box.cx * clampedHead;
+  const midY = box.y + box.cy / 2;
+  const bodyLeft = box.x + head;
+  const bodyRight = box.x + box.cx - head;
+  return [
+    { x: box.x, y: midY },
+    { x: bodyLeft, y: box.y },
+    { x: bodyLeft, y: midY - halfBody },
+    { x: bodyRight, y: midY - halfBody },
+    { x: bodyRight, y: box.y },
+    { x: box.x + box.cx, y: midY },
+    { x: bodyRight, y: box.y + box.cy },
+    { x: bodyRight, y: midY + halfBody },
+    { x: bodyLeft, y: midY + halfBody },
+    { x: bodyLeft, y: box.y + box.cy }
+  ];
+}
+
+function quadArrowPoints(box, bodyRatio = 0.28, headRatio = 0.24) {
+  const halfBodyX = (box.cx * clamp(bodyRatio, 0.12, 0.6)) / 2;
+  const halfBodyY = (box.cy * clamp(bodyRatio, 0.12, 0.6)) / 2;
+  const headX = box.cx * clamp(headRatio, 0.12, 0.35);
+  const headY = box.cy * clamp(headRatio, 0.12, 0.35);
+  const cx = box.x + box.cx / 2;
+  const cy = box.y + box.cy / 2;
+  return [
+    { x: cx, y: box.y },
+    { x: cx + headX, y: box.y + headY },
+    { x: cx + halfBodyX, y: box.y + headY },
+    { x: cx + halfBodyX, y: cy - halfBodyY },
+    { x: box.x + box.cx - headX, y: cy - halfBodyY },
+    { x: box.x + box.cx - headX, y: box.y + headY },
+    { x: box.x + box.cx, y: cy },
+    { x: box.x + box.cx - headX, y: box.y + box.cy - headY },
+    { x: box.x + box.cx - headX, y: cy + halfBodyY },
+    { x: cx + halfBodyX, y: cy + halfBodyY },
+    { x: cx + halfBodyX, y: box.y + box.cy - headY },
+    { x: cx, y: box.y + box.cy },
+    { x: cx - headX, y: box.y + box.cy - headY },
+    { x: cx - halfBodyX, y: box.y + box.cy - headY },
+    { x: cx - halfBodyX, y: cy + halfBodyY },
+    { x: box.x + headX, y: cy + halfBodyY },
+    { x: box.x + headX, y: box.y + box.cy - headY },
+    { x: box.x, y: cy },
+    { x: box.x + headX, y: box.y + headY },
+    { x: box.x + headX, y: cy - halfBodyY },
+    { x: cx - halfBodyX, y: cy - halfBodyY },
+    { x: cx - halfBodyX, y: box.y + headY },
+    { x: cx - headX, y: box.y + headY }
+  ];
+}
+
+function cumulativeOffsets(values) {
+  const offsets = [0];
+  for (const value of values) {
+    offsets.push(offsets[offsets.length - 1] + Math.max(0, Number(value) || 0));
+  }
+  return offsets;
+}
+
+function offsetSpan(offsets, startIndex, span) {
+  const start = clamp(startIndex, 0, Math.max(0, offsets.length - 1));
+  const end = clamp(start + Math.max(1, span), 0, Math.max(0, offsets.length - 1));
+  return Math.max(0, offsets[end] - offsets[start]);
+}
+
 const PRESET_WEDGE_RECT_CALLOUT_ADJUSTS = [
   { name: "adj1", fmla: "val -20833" },
   { name: "adj2", fmla: "val 62500" }
@@ -631,6 +832,25 @@ function setPathForWedgeRectCallout(ctx, box, element) {
 
 function setPathForShape(ctx, shapeType, box, element = null) {
   const normalized = String(shapeType || "rect").toLowerCase();
+  const regularPolygonSides = {
+    heptagon: 7,
+    octagon: 8,
+    decagon: 10,
+    dodecagon: 12
+  };
+  if (regularPolygonSides[normalized]) {
+    polygonPath(ctx, regularPolygonPoints(box, regularPolygonSides[normalized]));
+    return;
+  }
+
+  const starMatch = normalized.match(/^star(\d+)$/);
+  if (starMatch) {
+    const starPoints = Number.parseInt(starMatch[1], 10);
+    const innerRatio = presetAdjustValue(element, "adj", 38000, 5000, 95000) / 100000;
+    polygonPath(ctx, starPolygonPoints(box, starPoints, innerRatio));
+    return;
+  }
+
   switch (normalized) {
     case "ellipse": {
       const cx = box.x + box.cx / 2;
@@ -727,6 +947,74 @@ function setPathForShape(ctx, shapeType, box, element = null) {
         { x: box.x, y: box.y + box.cy },
         { x: box.x + box.cx * 0.4, y: box.y + box.cy * 0.5 }
       ]);
+      break;
+    }
+    case "plus": {
+      polygonPath(ctx, pointsFromRatios(box, [
+        [0.35, 0],
+        [0.65, 0],
+        [0.65, 0.35],
+        [1, 0.35],
+        [1, 0.65],
+        [0.65, 0.65],
+        [0.65, 1],
+        [0.35, 1],
+        [0.35, 0.65],
+        [0, 0.65],
+        [0, 0.35],
+        [0.35, 0.35]
+      ]));
+      break;
+    }
+    case "homeplate": {
+      polygonPath(ctx, pointsFromRatios(box, [
+        [0, 0],
+        [0.72, 0],
+        [1, 0.5],
+        [0.72, 1],
+        [0, 1]
+      ]));
+      break;
+    }
+    case "rightarrow": {
+      polygonPath(ctx, blockArrowPoints(box, "right"));
+      break;
+    }
+    case "leftarrow": {
+      polygonPath(ctx, blockArrowPoints(box, "left"));
+      break;
+    }
+    case "uparrow": {
+      polygonPath(ctx, blockArrowPoints(box, "up"));
+      break;
+    }
+    case "downarrow": {
+      polygonPath(ctx, blockArrowPoints(box, "down"));
+      break;
+    }
+    case "leftrightarrow": {
+      polygonPath(ctx, doubleArrowPoints(box, "horizontal"));
+      break;
+    }
+    case "updownarrow": {
+      polygonPath(ctx, doubleArrowPoints(box, "vertical"));
+      break;
+    }
+    case "quadarrow": {
+      polygonPath(ctx, quadArrowPoints(box));
+      break;
+    }
+    case "notchedrightarrow": {
+      polygonPath(ctx, pointsFromRatios(box, [
+        [0, 0.28],
+        [0.62, 0.28],
+        [0.62, 0],
+        [1, 0.5],
+        [0.62, 1],
+        [0.62, 0.72],
+        [0.16, 0.72],
+        [0, 0.5]
+      ]));
       break;
     }
     case "wedgerectcallout": {
@@ -1401,6 +1689,9 @@ async function drawImageElement(ctx, element, scaleX, scaleY) {
 
 async function drawSlideBackground(ctx, slide, widthPx, heightPx) {
   const background = slide?.background || {};
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   let fillStyle = toCanvasColor("#FFFFFF", 1);
   if (background?.type === "solid") {
     fillStyle = toCanvasColor(background.color || "#FFFFFF", background.alpha ?? 1);
@@ -1436,6 +1727,7 @@ async function drawSlideBackground(ctx, slide, widthPx, heightPx) {
       ctx.drawImage(image, 0, 0, widthPx, heightPx);
     }
   }
+  ctx.restore();
 }
 
 function drawTableCellText(ctx, cell, x, y, width, height, scaleX, scaleY) {
@@ -1497,45 +1789,53 @@ function drawTable(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
 
   withElementTransform(ctx, box, () => {
-    const totalWidth = element.gridCols.reduce((sum, width) => sum + width, 0) || element.cx;
+    const columnCount = Math.max(
+      element.gridCols.length || 0,
+      ...element.rows.map((row) => row.cells.length || 0),
+      1
+    );
+    const fallbackColumnWidth = columnCount ? element.cx / columnCount : element.cx;
+    const rawColumnWidths = Array.from({ length: columnCount }, (_, index) => element.gridCols[index] || fallbackColumnWidth);
+    const totalWidth = rawColumnWidths.reduce((sum, width) => sum + width, 0) || element.cx;
     const widthScale = totalWidth ? box.cx / totalWidth : 1;
     const rowHeights = element.rows.map((row) => row.height || (element.rows.length ? element.cy / element.rows.length : element.cy));
+    const columnOffsets = cumulativeOffsets(rawColumnWidths.map((width) => width * widthScale));
+    const rowOffsets = cumulativeOffsets(rowHeights.map((height) => height * scaleY));
 
-    let y = box.y;
     for (let ri = 0; ri < element.rows.length; ri += 1) {
       const row = element.rows[ri];
-      const rowHeight = rowHeights[ri] * scaleY;
-      let x = box.x;
-
       for (let ci = 0; ci < row.cells.length; ci += 1) {
         const cell = row.cells[ci];
-        const spanCols = Math.max(1, cell.gridSpan || 1);
-        const spanRows = Math.max(1, cell.rowSpan || 1);
-        const rawWidth = element.gridCols.slice(ci, ci + spanCols)
-          .reduce((sum, value) => sum + value, 0) || (totalWidth / Math.max(1, row.cells.length));
-        const rawHeight = rowHeights.slice(ri, ri + spanRows)
-          .reduce((sum, value) => sum + value, 0) || rowHeights[ri];
-        const cellWidth = rawWidth * widthScale;
-        const cellHeight = rawHeight * scaleY;
-
         if (cell.hMerge || cell.vMerge) {
-          x += (element.gridCols[ci] || 0) * widthScale;
           continue;
         }
 
+        const spanCols = Math.max(1, cell.gridSpan || 1);
+        const spanRows = Math.max(1, cell.rowSpan || 1);
+        const cellX = box.x + columnOffsets[Math.min(ci, columnOffsets.length - 1)];
+        const cellY = box.y + rowOffsets[Math.min(ri, rowOffsets.length - 1)];
+        const cellWidth = offsetSpan(columnOffsets, ci, spanCols);
+        const cellHeight = offsetSpan(rowOffsets, ri, spanRows);
+
         ctx.fillStyle = toCanvasColor(cell.fill?.color || "#FFFFFF", cell.fill?.alpha ?? 1);
-        ctx.fillRect(x, y, cellWidth, cellHeight);
+        ctx.fillRect(cellX, cellY, cellWidth, cellHeight);
 
         for (const side of ["left", "right", "top", "bottom"]) {
-          drawTableCellBorder(ctx, side, cell.borders?.[side], x, y, cellWidth, cellHeight, scaleX, scaleY);
+          drawTableCellBorder(ctx, side, cell.borders?.[side], cellX, cellY, cellWidth, cellHeight, scaleX, scaleY);
         }
 
-        drawTableCellText(ctx, cell, x, y, cellWidth, cellHeight, scaleX, scaleY);
-        x += cellWidth;
-        ci += spanCols - 1;
-      }
+        drawTableCellText(ctx, cell, cellX, cellY, cellWidth, cellHeight, scaleX, scaleY);
 
-      y += rowHeight;
+        let skipPlaceholders = 0;
+        while (
+          skipPlaceholders < spanCols - 1
+          && row.cells[ci + skipPlaceholders + 1]
+          && (row.cells[ci + skipPlaceholders + 1].hMerge || row.cells[ci + skipPlaceholders + 1].vMerge)
+        ) {
+          skipPlaceholders += 1;
+        }
+        ci += skipPlaceholders;
+      }
     }
   });
 }
