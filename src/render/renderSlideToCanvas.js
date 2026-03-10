@@ -1869,24 +1869,19 @@ function drawTable(ctx, element, scaleX, scaleY) {
 
     for (let ri = 0; ri < element.rows.length; ri += 1) {
       const row = element.rows[ri];
-      const compactMode = row.cells.length < columnCount;
       let logicalCol = 0;
       for (let ci = 0; ci < row.cells.length; ci += 1) {
         const cell = row.cells[ci];
-        let colIndex = ci;
-        if (compactMode) {
-          while (occupied.has(`${ri}:${logicalCol}`)) {
-            logicalCol += 1;
-          }
-          colIndex = logicalCol;
-        }
-
         if (cell.hMerge || cell.vMerge) {
-          if (compactMode) {
-            logicalCol = colIndex + 1;
-          }
+          logicalCol += 1;
           continue;
         }
+
+        while (occupied.has(`${ri}:${logicalCol}`)) {
+          logicalCol += 1;
+        }
+
+        const colIndex = logicalCol;
 
         const spanCols = Math.max(1, cell.gridSpan || 1);
         const spanRows = Math.max(1, cell.rowSpan || 1);
@@ -1904,25 +1899,16 @@ function drawTable(ctx, element, scaleX, scaleY) {
 
         drawTableCellText(ctx, cell, cellX, cellY, cellWidth, cellHeight, scaleX, scaleY);
 
+        for (let spanColIndex = colIndex + 1; spanColIndex < Math.min(columnCount, colIndex + spanCols); spanColIndex += 1) {
+          occupied.add(`${ri}:${spanColIndex}`);
+        }
         for (let spanRowIndex = ri + 1; spanRowIndex < Math.min(element.rows.length, ri + spanRows); spanRowIndex += 1) {
           for (let spanColIndex = colIndex; spanColIndex < Math.min(columnCount, colIndex + spanCols); spanColIndex += 1) {
             occupied.add(`${spanRowIndex}:${spanColIndex}`);
           }
         }
 
-        if (compactMode) {
-          logicalCol = colIndex + spanCols;
-        } else {
-          let skipPlaceholders = 0;
-          while (
-            skipPlaceholders < spanCols - 1
-            && row.cells[ci + skipPlaceholders + 1]
-            && (row.cells[ci + skipPlaceholders + 1].hMerge || row.cells[ci + skipPlaceholders + 1].vMerge)
-          ) {
-            skipPlaceholders += 1;
-          }
-          ci += skipPlaceholders;
-        }
+        logicalCol = colIndex + 1;
       }
     }
   });
