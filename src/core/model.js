@@ -884,18 +884,8 @@ function parseShapeCommon(shapeNode, effectiveSpPrNode, effectiveStyleNode, them
   };
 }
 
-const CONTENT_PLACEHOLDER_TYPES = new Set([
-  "title",
-  "ctrtitle",
-  "subtitle",
-  "body",
-  "obj",
-  "subbody"
-]);
-
 function placeholderSuppresssInheritedParagraphs(placeholder) {
-  const type = String(placeholder?.type || "").toLowerCase();
-  return CONTENT_PLACEHOLDER_TYPES.has(type);
+  return Boolean(placeholder);
 }
 
 function inheritTextBodyFormattingOnly(txBodyNode) {
@@ -2065,12 +2055,15 @@ function parseOrderedTreeChildren(
 }
 
 function orderedEntryName(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
   return Object.keys(entry || {}).find((key) => key !== ":@") || null;
 }
 
 function orderedEntryChildren(entry) {
   const name = orderedEntryName(entry);
-  return name ? ensureArray(entry?.[name]) : [];
+  return name && Array.isArray(entry?.[name]) ? entry[name] : [];
 }
 
 function findOrderedChildrenByPath(entries, path) {
