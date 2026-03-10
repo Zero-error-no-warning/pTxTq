@@ -195,11 +195,11 @@ function drawLineEnd(ctx, lineEnd, tip, other, strokeStyle, lineWidthPx) {
 
   const markerLength = Math.max(
     lineWidthPx * 2,
-    lineWidthPx * lineEndScale(lineEnd.length, 2.8, 4.2, 6.2)
+    lineWidthPx * lineEndScale(lineEnd.length, 3.0, 4.0, 5.0)
   );
   const markerHalfWidth = Math.max(
-    lineWidthPx * 0.8,
-    (lineWidthPx * lineEndScale(lineEnd.width, 2.0, 3.4, 5.0)) / 2
+    lineWidthPx * 0.75,
+    (lineWidthPx * lineEndScale(lineEnd.width, 2.0, 3.0, 4.5)) / 2
   );
 
   const backX = tip.x + ux * markerLength;
@@ -216,7 +216,7 @@ function drawLineEnd(ctx, lineEnd, tip, other, strokeStyle, lineWidthPx) {
 
   switch (endType) {
     case "arrow": {
-      ctx.lineWidth = Math.max(1, lineWidthPx * lineEndScale(lineEnd.width, 0.75, 0.95, 1.1));
+      ctx.lineWidth = Math.max(1, lineWidthPx * lineEndScale(lineEnd.width, 0.8, 1.0, 1.2));
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       ctx.beginPath();
@@ -329,6 +329,63 @@ function drawLineSegment(ctx, box, line, scaleX, scaleY) {
   ctx.lineTo(end.x, end.y);
   const strokeStyle = strokeWithElementLine(ctx, line, scaleX, scaleY);
   drawLineEnds(ctx, line, start, end, strokeStyle);
+}
+
+function drawPolylineSegment(ctx, points, line, scaleX, scaleY) {
+  if (!points || points.length < 2) {
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  const strokeStyle = strokeWithElementLine(ctx, line, scaleX, scaleY);
+  if (strokeStyle) {
+    drawLineEnd(ctx, line?.headEnd, points[0], points[1], strokeStyle.strokeStyle, strokeStyle.widthPx);
+    drawLineEnd(
+      ctx,
+      line?.tailEnd,
+      points[points.length - 1],
+      points[points.length - 2],
+      strokeStyle.strokeStyle,
+      strokeStyle.widthPx
+    );
+  }
+}
+
+function connectorPolylinePoints(box, shapeType) {
+  const normalized = String(shapeType || "").toLowerCase();
+  const start = { x: box.x, y: box.y };
+  const end = { x: box.x + box.cx, y: box.y + box.cy };
+  switch (normalized) {
+    case "bentconnector2":
+      return [start, { x: end.x, y: start.y }, end];
+    case "bentconnector3": {
+      const midX = box.x + box.cx * 0.5;
+      return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
+    }
+    case "bentconnector4": {
+      const x1 = box.x + box.cx * 0.35;
+      const midY = box.y + box.cy * 0.5;
+      return [start, { x: x1, y: start.y }, { x: x1, y: midY }, { x: end.x, y: midY }, end];
+    }
+    case "bentconnector5": {
+      const x1 = box.x + box.cx * 0.33;
+      const x2 = box.x + box.cx * 0.66;
+      const midY = box.y + box.cy * 0.5;
+      return [
+        start,
+        { x: x1, y: start.y },
+        { x: x1, y: midY },
+        { x: x2, y: midY },
+        { x: x2, y: end.y },
+        end
+      ];
+    }
+    default:
+      return null;
+  }
 }
 
 function pathStrokeEnabled(path) {
@@ -1075,6 +1132,13 @@ function drawShape(ctx, element, scaleX, scaleY) {
 
 function drawLineElement(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
+  const connectorPoints = connectorPolylinePoints(box, element?.shapeType);
+  if (connectorPoints) {
+    withElementTransform(ctx, box, () => {
+      drawPolylineSegment(ctx, connectorPoints, element.line, scaleX, scaleY);
+    });
+    return;
+  }
   if (element?.geometry?.kind === "cust") {
     withElementTransform(ctx, box, () => {
       const drawn = drawCustomGeometry(ctx, element, box, scaleX, scaleY);
@@ -1801,20 +1865,34 @@ function drawTable(ctx, element, scaleX, scaleY) {
     const rowHeights = element.rows.map((row) => row.height || (element.rows.length ? element.cy / element.rows.length : element.cy));
     const columnOffsets = cumulativeOffsets(rawColumnWidths.map((width) => width * widthScale));
     const rowOffsets = cumulativeOffsets(rowHeights.map((height) => height * scaleY));
+    const occupied = new Set();
 
     for (let ri = 0; ri < element.rows.length; ri += 1) {
       const row = element.rows[ri];
+      const compactMode = row.cells.length < columnCount;
+      let logicalCol = 0;
       for (let ci = 0; ci < row.cells.length; ci += 1) {
         const cell = row.cells[ci];
+        let colIndex = ci;
+        if (compactMode) {
+          while (occupied.has(`${ri}:${logicalCol}`)) {
+            logicalCol += 1;
+          }
+          colIndex = logicalCol;
+        }
+
         if (cell.hMerge || cell.vMerge) {
+          if (compactMode) {
+            logicalCol = colIndex + 1;
+          }
           continue;
         }
 
         const spanCols = Math.max(1, cell.gridSpan || 1);
         const spanRows = Math.max(1, cell.rowSpan || 1);
-        const cellX = box.x + columnOffsets[Math.min(ci, columnOffsets.length - 1)];
+        const cellX = box.x + columnOffsets[Math.min(colIndex, columnOffsets.length - 1)];
         const cellY = box.y + rowOffsets[Math.min(ri, rowOffsets.length - 1)];
-        const cellWidth = offsetSpan(columnOffsets, ci, spanCols);
+        const cellWidth = offsetSpan(columnOffsets, colIndex, spanCols);
         const cellHeight = offsetSpan(rowOffsets, ri, spanRows);
 
         ctx.fillStyle = toCanvasColor(cell.fill?.color || "#FFFFFF", cell.fill?.alpha ?? 1);
@@ -1826,15 +1904,25 @@ function drawTable(ctx, element, scaleX, scaleY) {
 
         drawTableCellText(ctx, cell, cellX, cellY, cellWidth, cellHeight, scaleX, scaleY);
 
-        let skipPlaceholders = 0;
-        while (
-          skipPlaceholders < spanCols - 1
-          && row.cells[ci + skipPlaceholders + 1]
-          && (row.cells[ci + skipPlaceholders + 1].hMerge || row.cells[ci + skipPlaceholders + 1].vMerge)
-        ) {
-          skipPlaceholders += 1;
+        for (let spanRowIndex = ri + 1; spanRowIndex < Math.min(element.rows.length, ri + spanRows); spanRowIndex += 1) {
+          for (let spanColIndex = colIndex; spanColIndex < Math.min(columnCount, colIndex + spanCols); spanColIndex += 1) {
+            occupied.add(`${spanRowIndex}:${spanColIndex}`);
+          }
         }
-        ci += skipPlaceholders;
+
+        if (compactMode) {
+          logicalCol = colIndex + spanCols;
+        } else {
+          let skipPlaceholders = 0;
+          while (
+            skipPlaceholders < spanCols - 1
+            && row.cells[ci + skipPlaceholders + 1]
+            && (row.cells[ci + skipPlaceholders + 1].hMerge || row.cells[ci + skipPlaceholders + 1].vMerge)
+          ) {
+            skipPlaceholders += 1;
+          }
+          ci += skipPlaceholders;
+        }
       }
     }
   });
