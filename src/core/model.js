@@ -15,6 +15,7 @@ import {
 import {
   contentTypeMap,
   detectImageMimeByExt,
+  parseXmlPreserveOrder,
   relsPartPath,
   resolveTargetPath,
   uint8ToBase64
@@ -883,11 +884,64 @@ function parseShapeCommon(shapeNode, effectiveSpPrNode, effectiveStyleNode, them
   };
 }
 
+const CONTENT_PLACEHOLDER_TYPES = new Set([
+  "title",
+  "ctrtitle",
+  "subtitle",
+  "body",
+  "obj",
+  "subbody"
+]);
+
+function placeholderSuppresssInheritedParagraphs(placeholder) {
+  const type = String(placeholder?.type || "").toLowerCase();
+  return CONTENT_PLACEHOLDER_TYPES.has(type);
+}
+
+function inheritTextBodyFormattingOnly(txBodyNode) {
+  if (!txBodyNode) {
+    return null;
+  }
+  const inherited = {};
+  if (txBodyNode["a:bodyPr"]) {
+    inherited["a:bodyPr"] = deepClone(txBodyNode["a:bodyPr"]);
+  }
+  if (txBodyNode["a:lstStyle"]) {
+    inherited["a:lstStyle"] = deepClone(txBodyNode["a:lstStyle"]);
+  }
+  return Object.keys(inherited).length ? inherited : null;
+}
+
+function resolveEffectiveTextBody(shapeNode, inheritedShapeNode, placeholder) {
+  const directTxBody = shapeNode?.["p:txBody"] || null;
+  const inheritedTxBody = inheritedShapeNode?.["p:txBody"] || null;
+  if (!directTxBody && !inheritedTxBody) {
+    return null;
+  }
+
+  if (!placeholderSuppresssInheritedParagraphs(placeholder)) {
+    return deepMergeNodes(inheritedTxBody, directTxBody);
+  }
+
+  const inheritedFormatting = inheritTextBodyFormattingOnly(inheritedTxBody);
+  if (!directTxBody) {
+    return inheritedFormatting;
+  }
+
+  const merged = deepMergeNodes(inheritedFormatting, directTxBody) || {};
+  if (Object.prototype.hasOwnProperty.call(directTxBody, "a:p")) {
+    merged["a:p"] = deepClone(directTxBody["a:p"]);
+  } else {
+    delete merged["a:p"];
+  }
+  return merged;
+}
+
 function parseShapeElement(shapeNode, inheritedShapeNode, themeContext, masterTextStyles = null) {
   const effectiveSpPr = deepMergeNodes(inheritedShapeNode?.["p:spPr"], shapeNode?.["p:spPr"]);
   const effectiveStyle = deepMergeNodes(inheritedShapeNode?.["p:style"], shapeNode?.["p:style"]);
-  const effectiveTxBody = deepMergeNodes(inheritedShapeNode?.["p:txBody"], shapeNode?.["p:txBody"]);
   const placeholder = placeholderInfo(shapeNode) || placeholderInfo(inheritedShapeNode);
+  const effectiveTxBody = resolveEffectiveTextBody(shapeNode, inheritedShapeNode, placeholder);
   const textStyleFallback = resolveTextStyleForPlaceholder(placeholder, masterTextStyles);
 
   const common = parseShapeCommon(shapeNode, effectiveSpPr || {}, effectiveStyle || {}, themeContext);
@@ -2010,6 +2064,96 @@ function parseOrderedTreeChildren(
   }
 }
 
+function orderedEntryName(entry) {
+  return Object.keys(entry || {}).find((key) => key !== ":@") || null;
+}
+
+function orderedEntryChildren(entry) {
+  const name = orderedEntryName(entry);
+  return name ? ensureArray(entry?.[name]) : [];
+}
+
+function findOrderedChildrenByPath(entries, path) {
+  let current = ensureArray(entries);
+  for (const segment of ensureArray(path)) {
+    const next = current.find((entry) => orderedEntryName(entry) === segment);
+    if (!next) {
+      return [];
+    }
+    current = orderedEntryChildren(next);
+  }
+  return current;
+}
+
+function findFirstOrderedEntryByName(entries, targetName) {
+  for (const entry of ensureArray(entries)) {
+    const name = orderedEntryName(entry);
+    if (name === targetName) {
+      return entry;
+    }
+    const nested = findFirstOrderedEntryByName(orderedEntryChildren(entry), targetName);
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function orderedElementId(entry) {
+  const cNvPr = findFirstOrderedEntryByName([entry], "p:cNvPr");
+  const id = cNvPr?.[":@"]?.["@_id"];
+  return id === undefined || id === null ? null : String(id);
+}
+
+const DRAW_ORDER_TAGS = new Set(["p:sp", "p:cxnSp", "p:pic", "p:graphicFrame"]);
+const DRAW_ORDER_CONTAINER_TAGS = new Set(["p:grpSp", "mc:AlternateContent", "mc:Choice", "mc:Fallback"]);
+
+function collectOrderedElementKeys(entries, prefix = [], orderMap = new Map()) {
+  let position = 0;
+  for (const entry of ensureArray(entries)) {
+    const name = orderedEntryName(entry);
+    if (!name) {
+      continue;
+    }
+    const segment = String(position).padStart(4, "0");
+    const nextPrefix = [...prefix, segment];
+    if (DRAW_ORDER_TAGS.has(name)) {
+      const id = orderedElementId(entry);
+      if (id && !orderMap.has(id)) {
+        orderMap.set(id, nextPrefix.join("."));
+      }
+    }
+    if (DRAW_ORDER_CONTAINER_TAGS.has(name)) {
+      collectOrderedElementKeys(orderedEntryChildren(entry), nextPrefix, orderMap);
+    }
+    position += 1;
+  }
+  return orderMap;
+}
+
+function buildElementOrderMap(xmlText, treePath) {
+  if (!xmlText) {
+    return new Map();
+  }
+  const orderedRoot = parseXmlPreserveOrder(xmlText);
+  const spTreeChildren = findOrderedChildrenByPath(orderedRoot, treePath);
+  return collectOrderedElementKeys(spTreeChildren);
+}
+
+function sortElementsByOrder(elements, orderMap) {
+  return ensureArray(elements)
+    .map((element, index) => ({
+      element,
+      index,
+      key: orderMap.get(String(element?.id || "")) || `~${String(index).padStart(6, "0")}`
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key) || a.index - b.index)
+    .map((entry) => {
+      entry.element.drawOrderKey = entry.key;
+      return entry.element;
+    });
+}
+
 function parseGroupTreeElements(
   grpSpNode,
   themeContext,
@@ -2241,6 +2385,18 @@ export async function parsePresentationModel(openXmlPackage) {
   const notesSizeNode = presentationRoot?.["p:notesSz"] || {};
   const parsedThemeCache = new Map();
   const backgroundImageCache = new Map();
+  const elementOrderCache = new Map();
+
+  async function getElementOrderMap(partPath, treePath) {
+    if (!partPath || !openXmlPackage.hasPart(partPath)) {
+      return new Map();
+    }
+    if (!elementOrderCache.has(partPath)) {
+      const xmlText = await openXmlPackage.readText(partPath).catch(() => null);
+      elementOrderCache.set(partPath, buildElementOrderMap(xmlText, treePath));
+    }
+    return elementOrderCache.get(partPath) || new Map();
+  }
 
   const slides = [];
 
@@ -2290,9 +2446,13 @@ export async function parsePresentationModel(openXmlPackage) {
 
     const layoutPlaceholderMap = buildPlaceholderMap(layoutXml?.["p:sldLayout"]?.["p:cSld"]?.["p:spTree"]);
     const masterPlaceholderMap = buildPlaceholderMap(masterXml?.["p:sldMaster"]?.["p:cSld"]?.["p:spTree"]);
+    const slideOrderMap = await getElementOrderMap(slidePath, ["p:sld", "p:cSld", "p:spTree"]);
+    const layoutOrderMap = await getElementOrderMap(layoutPath, ["p:sldLayout", "p:cSld", "p:spTree"]);
+    const masterOrderMap = await getElementOrderMap(masterPath, ["p:sldMaster", "p:cSld", "p:spTree"]);
 
     const slideTree = slideXml?.["p:sld"]?.["p:cSld"]?.["p:spTree"] || {};
     const elements = [];
+    const slideGroupElements = [];
     const unhandledNodes = [];
     const renderElements = [];
     const identityTransform = { offX: 0, offY: 0, scaleX: 1, scaleY: 1, rotation: 0 };
@@ -2306,7 +2466,7 @@ export async function parsePresentationModel(openXmlPackage) {
 
     if (layoutShowMasterSp) {
       renderElements.push(
-        ...parseDecorativeTreeElements(
+        ...sortElementsByOrder(parseDecorativeTreeElements(
           masterTree,
           themeContext,
           masterRels,
@@ -2315,12 +2475,12 @@ export async function parsePresentationModel(openXmlPackage) {
           contentTypes,
           tableStylesXml,
           "master"
-        )
+        ), masterOrderMap)
       );
     }
 
     renderElements.push(
-      ...parseDecorativeTreeElements(
+      ...sortElementsByOrder(parseDecorativeTreeElements(
         layoutTree,
         themeContext,
         layoutRels,
@@ -2329,7 +2489,7 @@ export async function parsePresentationModel(openXmlPackage) {
         contentTypes,
         tableStylesXml,
         "layout"
-      )
+      ), layoutOrderMap)
     );
 
     for (const shapeNode of ensureArray(slideTree?.["p:sp"])) {
@@ -2362,7 +2522,7 @@ export async function parsePresentationModel(openXmlPackage) {
     }
 
     for (const groupNode of ensureArray(slideTree?.["p:grpSp"])) {
-      renderElements.push(
+      slideGroupElements.push(
         ...parseGroupTreeElements(
           groupNode,
           themeContext,
@@ -2382,7 +2542,12 @@ export async function parsePresentationModel(openXmlPackage) {
       unhandledNodes.push({ type: "mc:AlternateContent", node: deepClone(alternateNode) });
     }
 
-    renderElements.push(...elements);
+    const orderedSlideElements = sortElementsByOrder(elements, slideOrderMap);
+    const orderedSlideRenderElements = sortElementsByOrder(
+      [...elements, ...slideGroupElements],
+      slideOrderMap
+    );
+    renderElements.push(...orderedSlideRenderElements);
 
     await resolveImageDataUris(renderElements);
     await resolveChartData(renderElements);
@@ -2415,7 +2580,7 @@ export async function parsePresentationModel(openXmlPackage) {
       themeName: parsedTheme?.name || null,
       colorMap,
       background,
-      elements,
+      elements: orderedSlideElements,
       renderElements,
       unhandledNodes,
       sourceRelationships: flattenRelMap(slideRels),

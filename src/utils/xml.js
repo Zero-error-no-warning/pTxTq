@@ -17,6 +17,16 @@ const parser = new XMLParser({
   removeNSPrefix: false
 });
 
+const orderedParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+  parseTagValue: false,
+  parseAttributeValue: false,
+  trimValues: false,
+  removeNSPrefix: false,
+  preserveOrder: true
+});
+
 const builder = new XMLBuilder({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
@@ -30,6 +40,10 @@ const xmlDeclaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\
 
 export function parseXml(xmlText) {
   return parser.parse(xmlText);
+}
+
+export function parseXmlPreserveOrder(xmlText) {
+  return orderedParser.parse(xmlText);
 }
 
 export function buildXml(xmlObject) {
