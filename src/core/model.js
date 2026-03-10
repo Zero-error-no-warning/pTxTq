@@ -1039,6 +1039,7 @@ function parsePictureElement(picNode, relsMap, slidePath, packageModel, contentT
 
 function parseTableCell(cellNode, themeContext, fallbackFill) {
   const tcPr = cellNode?.["a:tcPr"] || {};
+  const cellAttrs = cellNode || {};
   const explicitFill = resolveFill(tcPr, null, themeContext);
   const fill = explicitFill || fallbackFill || {
     type: "solid",
@@ -1071,10 +1072,10 @@ function parseTableCell(cellNode, themeContext, fallbackFill) {
     marginRight: toInt(tcPr?.["@_marR"], 0),
     marginTop: toInt(tcPr?.["@_marT"], 0),
     marginBottom: toInt(tcPr?.["@_marB"], 0),
-    rowSpan: toInt(tcPr?.["@_rowSpan"], 1),
-    gridSpan: toInt(tcPr?.["@_gridSpan"], 1),
-    hMerge: normalizeBool(tcPr?.["@_hMerge"]),
-    vMerge: normalizeBool(tcPr?.["@_vMerge"]),
+    rowSpan: toInt(cellAttrs?.["@_rowSpan"] ?? tcPr?.["@_rowSpan"], 1),
+    gridSpan: toInt(cellAttrs?.["@_gridSpan"] ?? tcPr?.["@_gridSpan"], 1),
+    hMerge: normalizeBool(cellAttrs?.["@_hMerge"] ?? tcPr?.["@_hMerge"]),
+    vMerge: normalizeBool(cellAttrs?.["@_vMerge"] ?? tcPr?.["@_vMerge"]),
     _styleMeta: {
       explicitFill: Boolean(explicitFill),
       explicitBorders: explicitBorderNodes
