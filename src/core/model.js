@@ -2163,6 +2163,65 @@ function sortElementsByOrder(elements, orderMap) {
     });
 }
 
+function elementHasVisibleText(element) {
+  return Boolean(
+    element?.text?.paragraphs?.some((paragraph) => (
+      ensureArray(paragraph?.runs).some((run) => String(run?.text || "").trim().length > 0)
+    ))
+  );
+}
+
+function elementBounds(element) {
+  return {
+    x: toInt(element?.x, 0),
+    y: toInt(element?.y, 0),
+    cx: Math.max(0, toInt(element?.cx, 0)),
+    cy: Math.max(0, toInt(element?.cy, 0))
+  };
+}
+
+function overlapRatio(a, b) {
+  const ax2 = a.x + a.cx;
+  const ay2 = a.y + a.cy;
+  const bx2 = b.x + b.cx;
+  const by2 = b.y + b.cy;
+  const overlapW = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, b.x));
+  const overlapH = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, b.y));
+  if (!overlapW || !overlapH) {
+    return 0;
+  }
+  const overlapArea = overlapW * overlapH;
+  const minArea = Math.max(1, Math.min(a.cx * a.cy, b.cx * b.cy));
+  return overlapArea / minArea;
+}
+
+function isDecorativePlaceholderTextElement(element, slidePlaceholders) {
+  if (!elementHasVisibleText(element)) {
+    return false;
+  }
+  if (!["master", "layout"].includes(String(element?.sourceLayer || ""))) {
+    return false;
+  }
+
+  const bounds = elementBounds(element);
+  if (!bounds.cx || !bounds.cy) {
+    return false;
+  }
+
+  return ensureArray(slidePlaceholders).some((placeholderElement) => (
+    overlapRatio(bounds, elementBounds(placeholderElement)) >= 0.75
+  ));
+}
+
+function filterDecorativePlaceholderText(renderElements, slidePlaceholders) {
+  if (!ensureArray(slidePlaceholders).length) {
+    return ensureArray(renderElements);
+  }
+  return ensureArray(renderElements).filter((element) => (
+    !isDecorativePlaceholderTextElement(element, slidePlaceholders)
+  ));
+}
+
 function parseGroupTreeElements(
   grpSpNode,
   themeContext,
@@ -2557,10 +2616,12 @@ export async function parsePresentationModel(openXmlPackage) {
       slideOrderMap
     );
     renderElements.push(...orderedSlideRenderElements);
+    const slidePlaceholderElements = orderedSlideRenderElements.filter((element) => Boolean(element?.placeholder));
+    const filteredRenderElements = filterDecorativePlaceholderText(renderElements, slidePlaceholderElements);
 
-    await resolveImageDataUris(renderElements);
-    await resolveChartData(renderElements);
-    await resolveDiagramData(renderElements);
+    await resolveImageDataUris(filteredRenderElements);
+    await resolveChartData(filteredRenderElements);
+    await resolveDiagramData(filteredRenderElements);
 
     const background = await resolveBackgroundColor(slideXml, layoutXml, masterXml, themeContext, {
       slideRels,
@@ -2590,7 +2651,7 @@ export async function parsePresentationModel(openXmlPackage) {
       colorMap,
       background,
       elements: orderedSlideElements,
-      renderElements,
+      renderElements: filteredRenderElements,
       unhandledNodes,
       sourceRelationships: flattenRelMap(slideRels),
       _sourceXml: deepClone(slideXml)
