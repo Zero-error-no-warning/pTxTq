@@ -72,9 +72,10 @@ function placeholderInfo(shapeNode) {
   if (!ph) {
     return null;
   }
+  const hasExplicitIdx = Object.prototype.hasOwnProperty.call(ph, "@_idx");
   return {
     type: ph?.["@_type"] || "body",
-    idx: ph?.["@_idx"] || "0",
+    idx: hasExplicitIdx ? String(ph?.["@_idx"]) : null,
     orient: ph?.["@_orient"] || null,
     sz: ph?.["@_sz"] || null
   };
@@ -109,7 +110,7 @@ function placeholderTypeCompatible(targetType, candidateType) {
     return true;
   }
 
-  const bodyTypes = new Set(["body", "obj"]);
+  const bodyTypes = new Set(["body", "obj", "subbody"]);
   if (bodyTypes.has(target) && bodyTypes.has(candidate)) {
     return true;
   }
@@ -122,10 +123,16 @@ function nodeHasTransform(node) {
 }
 
 function placeholderMatchScore(targetPh, candidatePh, candidateNode) {
-  const targetIdx = String(targetPh?.idx ?? "0");
-  const candidateIdx = String(candidatePh?.idx ?? "0");
   const typeCompatible = placeholderTypeCompatible(targetPh?.type, candidatePh?.type);
-  const idxMatch = targetIdx === candidateIdx;
+  const targetIdx = targetPh?.idx;
+  const candidateIdx = candidatePh?.idx;
+  const idxMatch = targetIdx !== null
+    && targetIdx !== undefined
+    && targetIdx !== ""
+    && candidateIdx !== null
+    && candidateIdx !== undefined
+    && candidateIdx !== ""
+    && String(targetIdx) === String(candidateIdx);
 
   if (!typeCompatible && !idxMatch) {
     return -1;
@@ -661,7 +668,7 @@ function parseTextParagraph(
   };
 }
 
-function parseTextBody(txBodyNode, themeContext, inheritedStyle = {}, fallbackLstStyle = null) {
+function parseTextBody(txBodyNode, themeContext, inheritedStyle = {}, fallbackLstStyle = null, options = {}) {
   if (!txBodyNode) {
     return null;
   }
@@ -670,6 +677,7 @@ function parseTextBody(txBodyNode, themeContext, inheritedStyle = {}, fallbackLs
   const lstStyle = deepMergeNodes(fallbackLstStyle || {}, txBodyNode?.["a:lstStyle"] || {}) || {};
   const defPPr = lstStyle?.["a:defPPr"] || {};
   const defRPr = defPPr?.["a:defRPr"] || {};
+  const defaultInsets = options?.defaultInsets || {};
 
   const defaultPropsByLevel = (level) => {
     const normalized = Math.max(0, Math.min(8, toInt(level, 0)));
@@ -700,10 +708,10 @@ function parseTextBody(txBodyNode, themeContext, inheritedStyle = {}, fallbackLs
     forceAA: normalizeBool(bodyPr?.["@_forceAA"]),
     upright: normalizeBool(bodyPr?.["@_upright"]),
     numCol: toInt(bodyPr?.["@_numCol"], 1),
-    leftInset: toInt(bodyPr?.["@_lIns"], 45720),
-    topInset: toInt(bodyPr?.["@_tIns"], 22860),
-    rightInset: toInt(bodyPr?.["@_rIns"], 45720),
-    bottomInset: toInt(bodyPr?.["@_bIns"], 22860),
+    leftInset: toInt(bodyPr?.["@_lIns"], defaultInsets.left ?? 45720),
+    topInset: toInt(bodyPr?.["@_tIns"], defaultInsets.top ?? 22860),
+    rightInset: toInt(bodyPr?.["@_rIns"], defaultInsets.right ?? 45720),
+    bottomInset: toInt(bodyPr?.["@_bIns"], defaultInsets.bottom ?? 22860),
     paragraphs
   };
 }
@@ -1064,6 +1072,13 @@ function parseTableCell(cellNode, themeContext, fallbackFill) {
     text: parseTextBody(cellNode?.["a:txBody"], themeContext, {
       color: "#000000",
       fontFamily: themeContext?.theme?.fontScheme?.minor?.latin || "Calibri"
+    }, null, {
+      defaultInsets: {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0
+      }
     }),
     fill,
     borders,
