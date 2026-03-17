@@ -5,6 +5,7 @@ const RAD_TO_ANGLE = (180 * 60000) / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 const OOXML_DEGREE = 60000;
+const OOXML_FULL_TURN = 360 * OOXML_DEGREE;
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -218,8 +219,18 @@ export function resolveGeometryGuides(guides, vars = {}) {
 }
 
 export function buildGeometryVars(geometry, pathW, pathH) {
-  const w = Math.max(1, toNumber(pathW, 21600));
-  const h = Math.max(1, toNumber(pathH, 21600));
+  let shapeW = pathW;
+  let shapeH = pathH;
+  let options = {};
+  if (typeof pathH === "object" && pathH !== null) {
+    options = pathH;
+    shapeH = pathW;
+  } else if (arguments.length >= 4 && typeof arguments[3] === "object" && arguments[3] !== null) {
+    options = arguments[3];
+  }
+
+  const w = Math.max(1, toNumber(options.shapeW, toNumber(shapeW, 21600)));
+  const h = Math.max(1, toNumber(options.shapeH, toNumber(shapeH, 21600)));
   const ss = Math.min(w, h);
   const ls = Math.max(w, h);
 
@@ -253,8 +264,27 @@ export function buildGeometryVars(geometry, pathW, pathH) {
   addFractionVars(vars, "hd", h);
   addFractionVars(vars, "ssd", ss);
 
-  const withGuides = resolveGeometryGuides(geometry?.guideValues, vars);
-  return resolveGeometryGuides(geometry?.adjustValues, withGuides);
+  // OOXML preset/custom geometry resolves adjustment values before guide formulas.
+  // Many preset guides depend on avLst entries like adj/hf/vf.
+  const withAdjustments = resolveGeometryGuides(geometry?.adjustValues, vars);
+  return resolveGeometryGuides(geometry?.guideValues, withAdjustments);
+}
+
+export function fitGeometryExtents(pathW, pathH, boxW, boxH) {
+  const coordW = Math.max(1, toNumber(pathW, 21600));
+  const coordH = Math.max(1, toNumber(pathH, 21600));
+  const shapeW = Math.abs(toNumber(boxW, coordW));
+  const shapeH = Math.abs(toNumber(boxH, coordH));
+
+  if (shapeW <= 0.000001 || shapeH <= 0.000001) {
+    return { shapeW: coordW, shapeH: coordH };
+  }
+
+  const scale = Math.min(coordW / shapeW, coordH / shapeH);
+  return {
+    shapeW: shapeW * scale,
+    shapeH: shapeH * scale
+  };
 }
 
 export function convertOoxmlToAwtAngleDeg(ooAngleDeg, width, height) {
@@ -304,21 +334,44 @@ export function resolveOoxmlArcFromCurrentPoint(currentX, currentY, rx, ry, stAn
     return null;
   }
 
-  const startDeg = toNumber(stAng, 0) / OOXML_DEGREE;
-  const endDeg = startDeg + (toNumber(swAng, 0) / OOXML_DEGREE);
+  const sweepUnits = toNumber(swAng, 0);
+  const startRad = toRadians(stAng);
+  const endRad = startRad + toRadians(swAng);
+  const startEllipseParam = Math.atan2(safeRx * Math.sin(startRad), safeRy * Math.cos(startRad));
+  const centerX = toNumber(currentX, 0) - safeRx * Math.cos(startEllipseParam);
+  const centerY = toNumber(currentY, 0) - safeRy * Math.sin(startEllipseParam);
 
-  const awtStart = convertOoxmlToAwtAngleDeg(startDeg, safeRx, safeRy);
-  const awtEnd = convertOoxmlToAwtAngleDeg(endDeg, safeRx, safeRy);
-  const awtSweep = awtEnd - awtStart;
+  // Use the actual current point as the ellipse start to avoid Canvas inserting
+  // a chord when the analytically converted angle differs by a tiny amount.
+  const startParam = Math.atan2(
+    (toNumber(currentY, 0) - centerY) / safeRy,
+    (toNumber(currentX, 0) - centerX) / safeRx
+  );
 
-  // Canvas/SVG use y-down coordinates where increasing parameter angles sweep clockwise.
-  const startParam = -awtStart * DEG_TO_RAD;
-  const sweepParam = -awtSweep * DEG_TO_RAD;
+  const direction = sweepUnits >= 0 ? 1 : -1;
+  const wholeTurns = Math.trunc(Math.abs(sweepUnits) / OOXML_FULL_TURN);
+  const remainderUnits = Math.abs(sweepUnits) - (wholeTurns * OOXML_FULL_TURN);
 
-  const startRad = startDeg * DEG_TO_RAD;
-  const invStart = Math.atan2(safeRx * Math.sin(startRad), safeRy * Math.cos(startRad));
-  const centerX = toNumber(currentX, 0) - safeRx * Math.cos(invStart);
-  const centerY = toNumber(currentY, 0) - safeRy * Math.sin(invStart);
+  let remainderSweep = 0;
+  if (remainderUnits > 0.000001) {
+    const remainderEndRad = startRad + (direction * remainderUnits * ANGLE_TO_RAD);
+    const remainderEndParam = Math.atan2(
+      safeRx * Math.sin(remainderEndRad),
+      safeRy * Math.cos(remainderEndRad)
+    );
+    remainderSweep = remainderEndParam - startParam;
+    if (direction > 0) {
+      while (remainderSweep < -0.0000001) {
+        remainderSweep += Math.PI * 2;
+      }
+    } else {
+      while (remainderSweep > 0.0000001) {
+        remainderSweep -= Math.PI * 2;
+      }
+    }
+  }
+
+  const sweepParam = (direction * wholeTurns * Math.PI * 2) + remainderSweep;
 
   return {
     cx: centerX,

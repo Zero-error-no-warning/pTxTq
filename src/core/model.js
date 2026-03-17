@@ -247,18 +247,9 @@ function resolveFillFromRef(styleNode, themeContext) {
   }
 
   if (styleEntry?.type === "a:gradFill") {
-    const gsLst = styleEntry.node?.["a:gsLst"];
-    const stops = ensureArray(gsLst?.["a:gs"]);
-    if (stops.length) {
-      const resolved = resolveDrawingColor(first(stops), themeContext, referenceColor);
-      if (resolved) {
-        return {
-          type: "solid",
-          color: resolved.color,
-          alpha: resolved.alpha,
-          source: "theme-grad-fallback"
-        };
-      }
+    const gradient = parseGradientFillModel(styleEntry.node, themeContext, referenceColor, "theme-fill-style");
+    if (gradient) {
+      return gradient;
     }
   }
 
@@ -292,18 +283,9 @@ function resolveFill(spPrNode, styleNode, themeContext) {
   }
 
   if (spPrNode?.["a:gradFill"]) {
-    const grad = first(spPrNode["a:gradFill"]);
-    const stops = ensureArray(grad?.["a:gsLst"]?.["a:gs"]);
-    if (stops.length) {
-      const resolved = resolveDrawingColor(first(stops), themeContext);
-      if (resolved) {
-        return {
-          type: "solid",
-          color: resolved.color,
-          alpha: resolved.alpha,
-          source: "shape-grad-fallback"
-        };
-      }
+    const gradient = parseGradientFillModel(first(spPrNode["a:gradFill"]), themeContext, null, "shape");
+    if (gradient) {
+      return gradient;
     }
   }
 
@@ -362,6 +344,40 @@ function parseCustomDash(custDashNode) {
   return dashStops.length ? dashStops : null;
 }
 
+function parseLineJoinNode(lnNode) {
+  if (!lnNode) {
+    return undefined;
+  }
+  if (hasNode(lnNode, "a:round")) {
+    return { type: "round", limit: null };
+  }
+  if (hasNode(lnNode, "a:bevel")) {
+    return { type: "bevel", limit: null };
+  }
+  if (hasNode(lnNode, "a:miter")) {
+    const miter = first(lnNode?.["a:miter"]) || lnNode?.["a:miter"] || {};
+    return {
+      type: "miter",
+      limit: toInt(miter?.["@_lim"], 0)
+    };
+  }
+  return undefined;
+}
+
+function normalizeLineJoin(join, fallback = null) {
+  if (join === undefined) {
+    return fallback;
+  }
+  if (!join) {
+    return null;
+  }
+  const type = String(join?.type || join || "miter").toLowerCase();
+  return {
+    type: type === "round" || type === "bevel" ? type : "miter",
+    limit: toInt(join?.limit, 0)
+  };
+}
+
 function resolveDashNode(lnNode, fallbackDash = "solid", fallbackCustomDash = null) {
   if (!lnNode) {
     return {
@@ -413,6 +429,8 @@ function resolveLineFromRef(styleNode, themeContext) {
         dash: dashInfo.dash,
         customDash: dashInfo.customDash,
         cap: styleLn?.["@_cap"] || "flat",
+        join: normalizeLineJoin(parseLineJoinNode(styleLn), null),
+        cmpd: String(styleLn?.["@_cmpd"] || "sng").toLowerCase(),
         headEnd: normalizeLineEnd(parseLineEndNode(styleLn?.["a:headEnd"])),
         tailEnd: normalizeLineEnd(parseLineEndNode(styleLn?.["a:tailEnd"])),
         source: "theme-line-style"
@@ -428,6 +446,8 @@ function resolveLineFromRef(styleNode, themeContext) {
       dash: "solid",
       customDash: null,
       cap: "flat",
+      join: null,
+      cmpd: "sng",
       headEnd: null,
       tailEnd: null,
       source: "theme-line-ref"
@@ -450,6 +470,8 @@ function resolveLine(spPrNode, styleNode, themeContext) {
         dash: "none",
         customDash: null,
         cap: ln?.["@_cap"] || fallback?.cap || "flat",
+        join: normalizeLineJoin(parseLineJoinNode(ln), fallback?.join || null),
+        cmpd: String(ln?.["@_cmpd"] || fallback?.cmpd || "sng").toLowerCase(),
         headEnd: normalizeLineEnd(parseLineEndNode(ln?.["a:headEnd"]), fallback?.headEnd || null),
         tailEnd: normalizeLineEnd(parseLineEndNode(ln?.["a:tailEnd"]), fallback?.tailEnd || null),
         source: "shape"
@@ -464,6 +486,8 @@ function resolveLine(spPrNode, styleNode, themeContext) {
       dash: dashInfo.dash,
       customDash: dashInfo.customDash,
       cap: ln?.["@_cap"] || fallback?.cap || "flat",
+      join: normalizeLineJoin(parseLineJoinNode(ln), fallback?.join || null),
+      cmpd: String(ln?.["@_cmpd"] || fallback?.cmpd || "sng").toLowerCase(),
       headEnd: normalizeLineEnd(parseLineEndNode(ln?.["a:headEnd"]), fallback?.headEnd || null),
       tailEnd: normalizeLineEnd(parseLineEndNode(ln?.["a:tailEnd"]), fallback?.tailEnd || null),
       source: "shape"
@@ -702,6 +726,7 @@ function parseTextBody(txBodyNode, themeContext, inheritedStyle = {}, fallbackLs
     rotation: toInt(bodyPr?.["@_rot"], 0),
     verticalAlign: bodyPr?.["@_anchor"] || "t",
     wrap: bodyPr?.["@_wrap"] || "square",
+    autoFit: hasNode(bodyPr, "a:spAutoFit") ? "shape" : (hasNode(bodyPr, "a:normAutofit") ? "norm" : (hasNode(bodyPr, "a:noAutofit") ? "none" : null)),
     rtlCol: normalizeBool(bodyPr?.["@_rtlCol"]),
     fromWordArt: normalizeBool(bodyPr?.["@_fromWordArt"]),
     anchorCtr: normalizeBool(bodyPr?.["@_anchorCtr"]),
@@ -845,6 +870,12 @@ function parseCustomGeometry(spPrNode) {
     guideValues: parseGuideList(custGeom?.["a:gdLst"]),
     pathDefaults,
     paths,
+    textRect: custGeom?.["a:rect"] ? {
+      l: String(custGeom?.["a:rect"]?.["@_l"] ?? "l"),
+      t: String(custGeom?.["a:rect"]?.["@_t"] ?? "t"),
+      r: String(custGeom?.["a:rect"]?.["@_r"] ?? "r"),
+      b: String(custGeom?.["a:rect"]?.["@_b"] ?? "b")
+    } : null,
     raw: deepClone(custGeom)
   };
 }
@@ -2681,7 +2712,55 @@ export async function parsePresentationModel(openXmlPackage) {
 }
 
 export function modelColorToOpenXmlFill(fill) {
-  if (!fill || fill.type === "none" || !fill.color) {
+  if (!fill || fill.type === "none") {
+    return { "a:noFill": "" };
+  }
+
+  if (fill.type === "gradient" && ensureArray(fill.stops).length) {
+    const gradFill = {
+      "a:gsLst": {
+        "a:gs": ensureArray(fill.stops).map((stop) => {
+          const gs = {
+            "@_pos": clamp(toInt(stop?.pos, 0), 0, 100000),
+            "a:srgbClr": {
+              "@_val": rgbHexNoPrefix(stop?.color || "#000000")
+            }
+          };
+          if (stop?.alpha !== undefined && stop.alpha < 1) {
+            gs["a:srgbClr"]["a:alpha"] = {
+              "@_val": alphaToPct(stop.alpha)
+            };
+          }
+          return gs;
+        })
+      }
+    };
+
+    if (fill.gradientType === "path" && fill.path) {
+      gradFill["a:path"] = {
+        "@_path": fill.path
+      };
+      if (fill.fillToRect) {
+        gradFill["a:path"]["a:fillToRect"] = {
+          "@_l": toInt(fill.fillToRect.l, 0),
+          "@_t": toInt(fill.fillToRect.t, 0),
+          "@_r": toInt(fill.fillToRect.r, 0),
+          "@_b": toInt(fill.fillToRect.b, 0)
+        };
+      }
+    } else {
+      gradFill["a:lin"] = {
+        "@_ang": Math.round((Number(fill.angle) || 0) * 60000),
+        "@_scaled": fill.scaled === false ? "0" : "1"
+      };
+    }
+
+    return {
+      "a:gradFill": gradFill
+    };
+  }
+
+  if (!fill.color) {
     return { "a:noFill": "" };
   }
 
@@ -2763,6 +2842,18 @@ export function modelLineToOpenXmlLn(line) {
 
   if (line.cap && line.cap !== "flat") {
     ln["@_cap"] = line.cap;
+  }
+  if (line.cmpd && line.cmpd !== "sng") {
+    ln["@_cmpd"] = String(line.cmpd).toLowerCase();
+  }
+  if (line.join?.type === "round") {
+    ln["a:round"] = "";
+  } else if (line.join?.type === "bevel") {
+    ln["a:bevel"] = "";
+  } else if (line.join?.type === "miter") {
+    ln["a:miter"] = line.join?.limit ? {
+      "@_lim": toInt(line.join.limit, 0)
+    } : "";
   }
 
   const headEnd = modelLineEndToOpenXml(line.headEnd);
@@ -2981,6 +3072,14 @@ function customGeometryToOpenXml(geometry) {
   custGeom["a:avLst"] = guideListToOpenXml(geometry?.adjustValues);
   if (ensureArray(geometry?.guideValues).length) {
     custGeom["a:gdLst"] = guideListToOpenXml(geometry?.guideValues);
+  }
+  if (geometry?.textRect) {
+    custGeom["a:rect"] = {
+      "@_l": String(geometry.textRect.l ?? "l"),
+      "@_t": String(geometry.textRect.t ?? "t"),
+      "@_r": String(geometry.textRect.r ?? "r"),
+      "@_b": String(geometry.textRect.b ?? "b")
+    };
   }
 
   if (ensureArray(geometry?.paths).length) {

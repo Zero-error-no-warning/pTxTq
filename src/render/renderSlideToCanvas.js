@@ -1,12 +1,16 @@
 ﻿import { emuToPx } from "../utils/units.js";
 import { clamp, ensureArray } from "../utils/object.js";
+import { darken, lighten } from "../utils/color.js";
 import {
   buildGeometryVars,
   evalGeomFormula,
+  fitGeometryExtents,
   resolveGeometryGuides,
   resolveOoxmlArcFromCurrentPoint,
   splitArcSweep
 } from "../utils/geometry.js";
+import { resolvePresetShapeGeometry } from "../utils/presetShapeGeometry.js";
+import { buildPresetShapeParts } from "../utils/presetShape.js";
 
 const PX_PER_PT = 96 / 72;
 
@@ -55,7 +59,16 @@ function lineWidthToPx(widthEmu, scaleX, scaleY) {
 
 function isLineLikeShapeType(shapeType) {
   const normalized = String(shapeType || "").toLowerCase();
-  return normalized === "line" || normalized.includes("connector");
+  return normalized === "line"
+    || normalized === "straightconnector1"
+    || normalized === "bentconnector2"
+    || normalized === "bentconnector3"
+    || normalized === "bentconnector4"
+    || normalized === "bentconnector5"
+    || normalized === "curvedconnector2"
+    || normalized === "curvedconnector3"
+    || normalized === "curvedconnector4"
+    || normalized === "curvedconnector5";
 }
 
 const DASH_PRESET_FACTORS = {
@@ -80,6 +93,29 @@ function lineCapToCanvas(cap) {
     default:
       return "butt";
   }
+}
+
+function lineJoinType(join) {
+  return String(join?.type || join || "miter").toLowerCase();
+}
+
+function lineJoinToCanvas(join) {
+  switch (lineJoinType(join)) {
+    case "round":
+      return "round";
+    case "bevel":
+      return "bevel";
+    default:
+      return "miter";
+  }
+}
+
+function lineMiterLimit(join) {
+  const numeric = Number(join?.limit);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 10;
+  }
+  return Math.max(1, numeric > 1000 ? numeric / 100000 : numeric);
 }
 
 function lineEndScale(value, sm, med, lg) {
@@ -133,7 +169,10 @@ function lineRenderStyle(line, scaleX, scaleY) {
     strokeStyle: toCanvasColor(line.color, line.alpha ?? 1),
     widthPx: effectiveWidth,
     dashPattern: lineDashPattern(line, effectiveWidth),
-    cap: lineCapToCanvas(line.cap)
+    cap: lineCapToCanvas(line.cap),
+    join: lineJoinToCanvas(line.join),
+    miterLimit: lineMiterLimit(line.join),
+    compound: String(line?.cmpd || "sng").toLowerCase()
   };
 }
 
@@ -144,13 +183,51 @@ function applyLineStyle(ctx, style) {
   ctx.strokeStyle = style.strokeStyle;
   ctx.lineWidth = style.widthPx;
   ctx.lineCap = style.cap;
-  ctx.lineJoin = "miter";
+  ctx.lineJoin = style.join;
+  ctx.miterLimit = style.miterLimit;
   ctx.setLineDash(style.dashPattern);
 }
 
 function resetLineStyle(ctx) {
   ctx.setLineDash([]);
   ctx.lineCap = "butt";
+  ctx.lineJoin = "miter";
+  ctx.miterLimit = 10;
+}
+
+function compoundStrokeSpec(style) {
+  switch (style?.compound) {
+    case "dbl":
+      return { gapRatio: 0.5, innerRatio: 0 };
+    case "tri":
+      return { gapRatio: 0.58, innerRatio: 0.18 };
+    case "thickthin":
+      return { gapRatio: 0.56, innerRatio: 0.14 };
+    case "thinthick":
+      return { gapRatio: 0.56, innerRatio: 0.22 };
+    default:
+      return null;
+  }
+}
+
+function strokeCurrentPath(ctx, style) {
+  ctx.stroke();
+
+  const compound = compoundStrokeSpec(style);
+  if (!compound) {
+    return;
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.lineWidth = Math.max(0.5, style.widthPx * compound.gapRatio);
+  ctx.stroke();
+  ctx.restore();
+
+  if (compound.innerRatio > 0) {
+    ctx.lineWidth = Math.max(0.5, style.widthPx * compound.innerRatio);
+    ctx.stroke();
+  }
 }
 
 function strokeWithElementLine(ctx, line, scaleX, scaleY) {
@@ -159,9 +236,106 @@ function strokeWithElementLine(ctx, line, scaleX, scaleY) {
     return null;
   }
   applyLineStyle(ctx, style);
-  ctx.stroke();
+  strokeCurrentPath(ctx, style);
   resetLineStyle(ctx);
   return style;
+}
+
+function gradientVectorForBox(box, angleDeg = 0) {
+  const angleRad = ((Number(angleDeg) || 0) * Math.PI) / 180;
+  const dx = Math.cos(angleRad);
+  const dy = Math.sin(angleRad);
+  const cx = box.x + box.cx / 2;
+  const cy = box.y + box.cy / 2;
+  const tx = Math.abs(dx) < 0.0001 ? Number.POSITIVE_INFINITY : (box.cx / 2) / Math.abs(dx);
+  const ty = Math.abs(dy) < 0.0001 ? Number.POSITIVE_INFINITY : (box.cy / 2) / Math.abs(dy);
+  const span = Math.min(tx, ty);
+  return {
+    x0: cx - dx * span,
+    y0: cy - dy * span,
+    x1: cx + dx * span,
+    y1: cy + dy * span
+  };
+}
+
+function createCanvasFillStyle(ctx, fill, box) {
+  if (!fill || fill.type === "none") {
+    return null;
+  }
+  if (fill.type === "gradient" && ensureArray(fill.stops).length) {
+    let gradient = null;
+    if (fill.gradientType === "path" && fill.path === "circle") {
+      const cx = box.x + box.cx / 2;
+      const cy = box.y + box.cy / 2;
+      const radius = Math.max(1, Math.max(box.cx, box.cy) * 0.75);
+      gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    } else {
+      const { x0, y0, x1, y1 } = gradientVectorForBox(box, fill.angle);
+      gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+    }
+    for (const stop of ensureArray(fill.stops)) {
+      gradient.addColorStop(
+        clamp((Number(stop?.pos) || 0) / 100000, 0, 1),
+        toCanvasColor(stop?.color || "#FFFFFF", stop?.alpha ?? 1)
+      );
+    }
+    return gradient;
+  }
+  if (!fill.color) {
+    return null;
+  }
+  return toCanvasColor(fill.color, fill.alpha ?? 1);
+}
+
+function mapPathFillMode(fillMode) {
+  switch (String(fillMode || "norm").toLowerCase()) {
+    case "lightenless":
+      return { type: "lighten", amount: 0.84 };
+    case "lighten":
+      return { type: "lighten", amount: 0.7 };
+    case "darkenless":
+      return { type: "darken", amount: 0.2 };
+    case "darken":
+      return { type: "darken", amount: 0.35 };
+    default:
+      return null;
+  }
+}
+
+function transformFillColor(color, fillMode) {
+  const mode = mapPathFillMode(fillMode);
+  if (!mode || !color) {
+    return color;
+  }
+  return mode.type === "lighten"
+    ? lighten(color, mode.amount)
+    : darken(color, mode.amount);
+}
+
+function resolvePathFill(fill, fillMode) {
+  const mode = String(fillMode || "norm").toLowerCase();
+  if (!fill || mode === "none") {
+    return null;
+  }
+  if (mode === "norm") {
+    return fill;
+  }
+  if (fill.type === "gradient") {
+    return {
+      ...fill,
+      stops: ensureArray(fill.stops).map((stop) => ({
+        ...stop,
+        color: transformFillColor(stop?.color, mode)
+      }))
+    };
+  }
+  if (!fill.color) {
+    return fill;
+  }
+  return {
+    ...fill,
+    color: transformFillColor(fill.color, mode)
+  };
 }
 
 function polygonPath(ctx, points) {
@@ -410,7 +584,7 @@ function mapGeometryPoint(box, pathW, pathH, x, y) {
 function traceCustomGeometryPath(ctx, geometry, path, box) {
   const pathW = Math.max(1, Number(path?.w || geometry?.pathDefaults?.w || 21600));
   const pathH = Math.max(1, Number(path?.h || geometry?.pathDefaults?.h || 21600));
-  const vars = buildGeometryVars(geometry, pathW, pathH);
+  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, box.cx, box.cy));
 
   let traced = false;
   let currentRaw = null;
@@ -549,8 +723,9 @@ function drawCustomGeometry(ctx, element, box, scaleX, scaleY) {
       continue;
     }
 
-    if (element.fill?.color && pathFillEnabled(path)) {
-      ctx.fillStyle = toCanvasColor(element.fill.color, element.fill.alpha ?? 1);
+    const fillStyle = createCanvasFillStyle(ctx, resolvePathFill(element.fill, path?.fill), box);
+    if (fillStyle && pathFillEnabled(path)) {
+      ctx.fillStyle = fillStyle;
       ctx.fill();
       drew = true;
     }
@@ -562,6 +737,43 @@ function drawCustomGeometry(ctx, element, box, scaleX, scaleY) {
   }
 
   return drew;
+}
+
+function resolveRenderableGeometry(element) {
+  if (element?.geometry?.kind === "cust") {
+    return element.geometry;
+  }
+  if (element?.geometry?.kind === "prst") {
+    return resolvePresetShapeGeometry(element.shapeType || element.geometry?.preset, element.geometry);
+  }
+  return null;
+}
+
+function resolveGeometryTextBox(box, geometry) {
+  const textRect = geometry?.textRect;
+  if (!textRect) {
+    return box;
+  }
+
+  const pathW = Math.max(1, Number(geometry?.pathDefaults?.w || 21600));
+  const pathH = Math.max(1, Number(geometry?.pathDefaults?.h || 21600));
+  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, box.cx, box.cy));
+  const left = evalGeomFormula(textRect.l ?? "l", vars);
+  const top = evalGeomFormula(textRect.t ?? "t", vars);
+  const right = evalGeomFormula(textRect.r ?? "r", vars);
+  const bottom = evalGeomFormula(textRect.b ?? "b", vars);
+
+  const mappedLeft = box.x + (left / pathW) * box.cx;
+  const mappedTop = box.y + (top / pathH) * box.cy;
+  const mappedRight = box.x + (right / pathW) * box.cx;
+  const mappedBottom = box.y + (bottom / pathH) * box.cy;
+
+  return {
+    x: Math.min(mappedLeft, mappedRight),
+    y: Math.min(mappedTop, mappedBottom),
+    cx: Math.max(0, Math.abs(mappedRight - mappedLeft)),
+    cy: Math.max(0, Math.abs(mappedBottom - mappedTop))
+  };
 }
 
 function presetAdjustValue(element, name, fallbackValue, min = 0, max = 100000) {
@@ -887,7 +1099,69 @@ function setPathForWedgeRectCallout(ctx, box, element) {
   ctx.closePath();
 }
 
+function tracePresetShapePart(ctx, part) {
+  switch (part?.kind) {
+    case "polygon":
+      polygonPath(ctx, ensureArray(part.points));
+      break;
+    case "loops":
+      for (const loop of ensureArray(part.loops)) {
+        polygonPath(ctx, ensureArray(loop));
+      }
+      break;
+    case "polyline": {
+      const points = ensureArray(part.points);
+      if (!points.length) {
+        break;
+      }
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 1) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      if (part.closed) {
+        ctx.closePath();
+      }
+      break;
+    }
+    case "ellipse":
+      ctx.moveTo(part.cx + part.rx, part.cy);
+      ctx.ellipse(part.cx, part.cy, part.rx, part.ry, 0, 0, Math.PI * 2);
+      break;
+    case "roundRect": {
+      const x = part.x;
+      const y = part.y;
+      const w = part.w;
+      const h = part.h;
+      const radius = Math.max(0, Math.min(part.r || 0, w / 2, h / 2));
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+      break;
+    }
+    case "rect":
+      ctx.rect(part.x, part.y, part.w, part.h);
+      break;
+    default:
+      break;
+  }
+}
+
 function setPathForShape(ctx, shapeType, box, element = null) {
+  const presetParts = buildPresetShapeParts(shapeType, box, element);
+  if (presetParts?.length) {
+    for (const part of presetParts) {
+      tracePresetShapePart(ctx, part);
+    }
+    return;
+  }
+
   const normalized = String(shapeType || "rect").toLowerCase();
   const regularPolygonSides = {
     heptagon: 7,
@@ -1099,10 +1373,12 @@ function setPathForShape(ctx, shapeType, box, element = null) {
 
 function drawShape(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
+  const renderGeometry = resolveRenderableGeometry(element);
+  const renderElement = renderGeometry ? { ...element, geometry: renderGeometry } : element;
   if (isLineLikeShapeType(element.shapeType)) {
-    if (element?.geometry?.kind === "cust") {
+    if (renderGeometry?.kind === "cust") {
       withElementTransform(ctx, box, () => {
-        drawLineSegment(ctx, box, element.line, scaleX, scaleY);
+        drawLineSegment(ctx, box, renderElement.line, scaleX, scaleY);
       });
       return;
     }
@@ -1111,8 +1387,8 @@ function drawShape(ctx, element, scaleX, scaleY) {
   }
 
   withElementTransform(ctx, box, () => {
-    if (element?.geometry?.kind === "cust") {
-      const drawn = drawCustomGeometry(ctx, element, box, scaleX, scaleY);
+    if (renderGeometry?.kind === "cust") {
+      const drawn = drawCustomGeometry(ctx, renderElement, box, scaleX, scaleY);
       if (drawn) {
         return;
       }
@@ -1121,17 +1397,20 @@ function drawShape(ctx, element, scaleX, scaleY) {
     ctx.beginPath();
     setPathForShape(ctx, element.shapeType, box, element);
 
-    if (element.fill?.color) {
-      ctx.fillStyle = toCanvasColor(element.fill.color, element.fill.alpha ?? 1);
+    const fillStyle = createCanvasFillStyle(ctx, renderElement.fill, box);
+    if (fillStyle) {
+      ctx.fillStyle = fillStyle;
       ctx.fill();
     }
 
-    strokeWithElementLine(ctx, element.line, scaleX, scaleY);
+    strokeWithElementLine(ctx, renderElement.line, scaleX, scaleY);
   });
 }
 
 function drawLineElement(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
+  const renderGeometry = resolveRenderableGeometry(element);
+  const renderElement = renderGeometry ? { ...element, geometry: renderGeometry } : element;
   const connectorPoints = connectorPolylinePoints(box, element?.shapeType);
   if (connectorPoints) {
     withElementTransform(ctx, box, () => {
@@ -1139,13 +1418,13 @@ function drawLineElement(ctx, element, scaleX, scaleY) {
     });
     return;
   }
-  if (element?.geometry?.kind === "cust") {
+  if (renderGeometry?.kind === "cust") {
     withElementTransform(ctx, box, () => {
-      const drawn = drawCustomGeometry(ctx, element, box, scaleX, scaleY);
+      const drawn = drawCustomGeometry(ctx, renderElement, box, scaleX, scaleY);
       if (drawn) {
         return;
       }
-      drawLineSegment(ctx, box, element.line, scaleX, scaleY);
+      drawLineSegment(ctx, box, renderElement.line, scaleX, scaleY);
     });
     return;
   }
@@ -1321,10 +1600,11 @@ function finalizeLineMeasurements(ctx, line) {
   return line;
 }
 
-function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle) {
+function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle, options = {}) {
   const lines = [];
   let line = newLine(paragraph);
   let hadVisibleText = false;
+  const wrapEnabled = options.wrapEnabled !== false;
 
   for (const run of ensureArray(paragraph?.runs)) {
     const style = normalizeRunStyle(run.style || {}, defaultStyle);
@@ -1350,7 +1630,7 @@ function wrapParagraphRuns(ctx, paragraph, boxWidthPx, defaultStyle) {
 
       hadVisibleText = true;
       const width = ctx.measureText(ch).width + charSpacingPx(style);
-      if (line.width + width > boxWidthPx && line.segments.length) {
+      if (wrapEnabled && line.width + width > boxWidthPx && line.segments.length) {
         flushLine(lines, line);
         line = newLine(paragraph);
         line.maxFontSizePx = Math.max(line.maxFontSizePx, fontPx);
@@ -1380,12 +1660,15 @@ function lineHeightPx(line) {
   return natural * spacing;
 }
 
-function alignmentToStartX(left, width, lineWidth, alignment) {
+function alignmentToStartX(left, width, lineWidth, alignment, options = {}) {
+  const allowOverflow = options.allowOverflow === true;
   if (alignment === "ctr") {
-    return left + Math.max(0, (width - lineWidth) / 2);
+    const offset = (width - lineWidth) / 2;
+    return left + (allowOverflow ? offset : Math.max(0, offset));
   }
   if (alignment === "r") {
-    return left + Math.max(0, width - lineWidth);
+    const offset = width - lineWidth;
+    return left + (allowOverflow ? offset : Math.max(0, offset));
   }
   return left;
 }
@@ -1557,6 +1840,60 @@ function drawVerticalTextBodyInBox(ctx, textBody, boxPx, defaultStyle) {
   ctx.restore();
 }
 
+function scaleParagraphForAutoFit(paragraph, scale) {
+  return {
+    ...paragraph,
+    lineSpacingPt: (paragraph?.lineSpacingPt || 0) * scale,
+    runs: ensureArray(paragraph?.runs).map((run) => ({
+      ...run,
+      style: run?.style ? {
+        ...run.style,
+        fontSizePt: (run.style.fontSizePt || 0) * scale
+      } : run?.style
+    })),
+    bullet: paragraph?.bullet ? {
+      ...paragraph.bullet,
+      sizePt: paragraph.bullet.sizePt ? paragraph.bullet.sizePt * scale : paragraph.bullet.sizePt
+    } : paragraph?.bullet
+  };
+}
+
+function autoFitNoWrapTextBody(ctx, textBody, width, height, defaultStyle) {
+  const paragraphs = ensureArray(textBody?.paragraphs);
+  if (!paragraphs.length) {
+    return textBody;
+  }
+
+  const layouts = [];
+  let maxWidth = 0;
+  let totalHeight = 0;
+  for (const paragraph of paragraphs) {
+    const before = Math.max(0, (paragraph.spaceBefore || 0) / 100) * PX_PER_PT;
+    const after = Math.max(0, (paragraph.spaceAfter || 0) / 100) * PX_PER_PT;
+    const marginLeft = Math.max(0, paragraph.marginLeft || 0);
+    const marginRight = Math.max(0, paragraph.marginRight || 0);
+    const paragraphWidth = Math.max(0, width - marginLeft - marginRight);
+    const lines = wrapParagraphRuns(ctx, paragraph, paragraphWidth, defaultStyle, { wrapEnabled: false });
+    const heights = lines.map((line) => lineHeightPx(line));
+    const widest = lines.reduce((acc, line) => Math.max(acc, lineDisplayWidth(line)), 0);
+    maxWidth = Math.max(maxWidth, widest);
+    totalHeight += before + heights.reduce((sum, lineHeight) => sum + lineHeight, 0) + after;
+    layouts.push({ paragraphWidth });
+  }
+
+  const widthScale = maxWidth > 0 ? width / maxWidth : 1;
+  const heightScale = totalHeight > 0 ? height / totalHeight : 1;
+  const scale = Math.min(1, widthScale, heightScale);
+  if (!(scale > 0) || scale >= 0.999) {
+    return textBody;
+  }
+
+  return {
+    ...textBody,
+    paragraphs: paragraphs.map((paragraph) => scaleParagraphForAutoFit(paragraph, scale))
+  };
+}
+
 function drawTextBodyInBox(ctx, textBody, boxPx) {
   if (!textBody) {
     return;
@@ -1584,18 +1921,24 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
     return;
   }
 
+  let effectiveTextBody = textBody;
+  if (String(textBody.wrap || "square").toLowerCase() === "none" && textBody.autoFit === "shape") {
+    effectiveTextBody = autoFitNoWrapTextBody(ctx, textBody, width, height, defaultStyle);
+  }
+
   const paragraphLayouts = [];
   let totalHeight = 0;
   const autoNumberState = new Map();
+  const wrapEnabled = String(effectiveTextBody.wrap || "square").toLowerCase() !== "none";
 
-  for (const paragraph of ensureArray(textBody.paragraphs)) {
+  for (const paragraph of ensureArray(effectiveTextBody.paragraphs)) {
     const before = Math.max(0, (paragraph.spaceBefore || 0) / 100) * PX_PER_PT;
     const after = Math.max(0, (paragraph.spaceAfter || 0) / 100) * PX_PER_PT;
     const marginLeft = Math.max(0, paragraph.marginLeft || 0);
     const marginRight = Math.max(0, paragraph.marginRight || 0);
     const indent = paragraph.indent || 0;
     const paragraphWidth = Math.max(0, width - marginLeft - marginRight);
-    const lines = wrapParagraphRuns(ctx, paragraph, paragraphWidth, defaultStyle);
+    const lines = wrapParagraphRuns(ctx, paragraph, paragraphWidth, defaultStyle, { wrapEnabled });
     if (!lines.length) {
       continue;
     }
@@ -1630,9 +1973,11 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
   }
 
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(left, top, width, height);
-  ctx.clip();
+  if (wrapEnabled) {
+    ctx.beginPath();
+    ctx.rect(left, top, width, height);
+    ctx.clip();
+  }
 
   let cursorY = verticalAnchorStartY(top, height, totalHeight, textBody.verticalAlign || "t");
 
@@ -1646,7 +1991,13 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
       const baselineY = cursorY + slack + line.maxAscent;
       const paragraphLeft = left + layout.marginLeft;
       const paragraphWidth = Math.max(0, width - layout.marginLeft - layout.marginRight);
-      const startX = alignmentToStartX(paragraphLeft, paragraphWidth, lineDisplayWidth(line), line.alignment);
+      const startX = alignmentToStartX(
+        paragraphLeft,
+        paragraphWidth,
+        lineDisplayWidth(line),
+        line.alignment,
+        { allowOverflow: !wrapEnabled }
+      );
 
       if (li === 0 && (layout.bullet?.type === "char" || layout.bulletLabel)) {
         const baseStyle = line.segments[0]?.style || defaultStyle;
@@ -1704,6 +2055,8 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
 
 function drawText(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
+  const renderGeometry = resolveRenderableGeometry(element);
+  const textBox = renderGeometry ? resolveGeometryTextBox(box, renderGeometry) : box;
   const paragraphs = ensureArray(element.text?.paragraphs).map((paragraph) => ({
     ...paragraph,
     marginLeft: (paragraph.marginLeft || 0) * scaleX,
@@ -1719,7 +2072,7 @@ function drawText(ctx, element, scaleX, scaleY) {
       rightInset: (element.text?.rightInset || 0) * scaleX,
       topInset: (element.text?.topInset || 0) * scaleY,
       bottomInset: (element.text?.bottomInset || 0) * scaleY
-    }, box);
+    }, textBox);
   });
 }
 
