@@ -900,6 +900,7 @@ function parseGeometry(spPrNode) {
 
 function parseShapeCommon(shapeNode, effectiveSpPrNode, effectiveStyleNode, themeContext) {
   const cNvPr = shapeNode?.["p:nvSpPr"]?.["p:cNvPr"] || shapeNode?.["p:nvPicPr"]?.["p:cNvPr"];
+  const cNvSpPr = shapeNode?.["p:nvSpPr"]?.["p:cNvSpPr"] || {};
   const transformNode = effectiveSpPrNode?.["a:xfrm"] || shapeNode?.["p:xfrm"] || shapeNode?.["a:xfrm"];
   const transform = parseTransform(transformNode || {});
 
@@ -918,6 +919,7 @@ function parseShapeCommon(shapeNode, effectiveSpPrNode, effectiveStyleNode, them
     rotation: transform.rotation,
     flipH: transform.flipH,
     flipV: transform.flipV,
+    isTextBox: normalizeBool(cNvSpPr?.["@_txBox"]),
     fill,
     line
   };

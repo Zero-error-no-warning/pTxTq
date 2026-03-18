@@ -582,10 +582,50 @@ function mapGeometryPoint(box, pathW, pathH, x, y) {
   };
 }
 
+const ASPECT_FIT_PRESET_GEOMETRIES = new Set([
+  "leftarrow",
+  "rightarrow",
+  "uparrow",
+  "downarrow",
+  "leftrightarrow",
+  "updownarrow",
+  "quadarrow",
+  "leftrightuparrow",
+  "leftuparrow",
+  "notchedrightarrow",
+  "leftarrowcallout",
+  "rightarrowcallout",
+  "uparrowcallout",
+  "downarrowcallout",
+  "leftrightarrowcallout",
+  "quadarrowcallout",
+  "leftcirculararrow",
+  "leftrightcirculararrow"
+]);
+
+function resolveGeometryCoordSpace(geometry, pathW, pathH, boxW, boxH) {
+  const presetKey = String(geometry?.preset || "").toLowerCase();
+  const isPresetGeometry = ASPECT_FIT_PRESET_GEOMETRIES.has(presetKey);
+  if (!isPresetGeometry) {
+    return {
+      vars: buildGeometryVars(geometry, pathW, pathH),
+      coordW: pathW,
+      coordH: pathH
+    };
+  }
+
+  const fit = fitGeometryExtents(pathW, pathH, boxW, boxH);
+  return {
+    vars: buildGeometryVars(geometry, pathW, pathH, fit),
+    coordW: Math.max(1, Number(fit.shapeW || pathW)),
+    coordH: Math.max(1, Number(fit.shapeH || pathH))
+  };
+}
+
 function traceCustomGeometryPath(ctx, geometry, path, box) {
   const pathW = Math.max(1, Number(path?.w || geometry?.pathDefaults?.w || 21600));
   const pathH = Math.max(1, Number(path?.h || geometry?.pathDefaults?.h || 21600));
-  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, box.cx, box.cy));
+  const { vars, coordW, coordH } = resolveGeometryCoordSpace(geometry, pathW, pathH, box.cx, box.cy);
 
   let traced = false;
   let currentRaw = null;
@@ -595,7 +635,7 @@ function traceCustomGeometryPath(ctx, geometry, path, box) {
     if (type === "moveTo" || type === "lnTo") {
       const rawX = evalGeomFormula(cmd?.x || "0", vars);
       const rawY = evalGeomFormula(cmd?.y || "0", vars);
-      const p = mapGeometryPoint(box, pathW, pathH, rawX, rawY);
+      const p = mapGeometryPoint(box, coordW, coordH, rawX, rawY);
       if (type === "moveTo") {
         ctx.moveTo(p.x, p.y);
       } else {
@@ -614,15 +654,15 @@ function traceCustomGeometryPath(ctx, geometry, path, box) {
       if (pts.length >= 2) {
         const cp = mapGeometryPoint(
           box,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[0]?.x || "0", vars),
           evalGeomFormula(pts[0]?.y || "0", vars)
         );
         const ep = mapGeometryPoint(
           box,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[1]?.x || "0", vars),
           evalGeomFormula(pts[1]?.y || "0", vars)
         );
@@ -641,22 +681,22 @@ function traceCustomGeometryPath(ctx, geometry, path, box) {
       if (pts.length >= 3) {
         const cp1 = mapGeometryPoint(
           box,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[0]?.x || "0", vars),
           evalGeomFormula(pts[0]?.y || "0", vars)
         );
         const cp2 = mapGeometryPoint(
           box,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[1]?.x || "0", vars),
           evalGeomFormula(pts[1]?.y || "0", vars)
         );
         const ep = mapGeometryPoint(
           box,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[2]?.x || "0", vars),
           evalGeomFormula(pts[2]?.y || "0", vars)
         );
@@ -677,9 +717,9 @@ function traceCustomGeometryPath(ctx, geometry, path, box) {
       const swAng = evalGeomFormula(cmd?.swAng || "0", vars);
       const arc = resolveOoxmlArcFromCurrentPoint(currentRaw.x, currentRaw.y, rxRaw, ryRaw, stAng, swAng);
       if (arc) {
-        const center = mapGeometryPoint(box, pathW, pathH, arc.cx, arc.cy);
-        const rx = Math.abs((arc.rx / pathW) * box.cx);
-        const ry = Math.abs((arc.ry / pathH) * box.cy);
+        const center = mapGeometryPoint(box, coordW, coordH, arc.cx, arc.cy);
+        const rx = Math.abs((arc.rx / coordW) * box.cx);
+        const ry = Math.abs((arc.ry / coordH) * box.cy);
         const chunks = splitArcSweep(arc.sweepParam);
 
         let segStart = arc.startParam;
@@ -758,16 +798,16 @@ function resolveGeometryTextBox(box, geometry) {
 
   const pathW = Math.max(1, Number(geometry?.pathDefaults?.w || 21600));
   const pathH = Math.max(1, Number(geometry?.pathDefaults?.h || 21600));
-  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, box.cx, box.cy));
+  const { vars, coordW, coordH } = resolveGeometryCoordSpace(geometry, pathW, pathH, box.cx, box.cy);
   const left = evalGeomFormula(textRect.l ?? "l", vars);
   const top = evalGeomFormula(textRect.t ?? "t", vars);
   const right = evalGeomFormula(textRect.r ?? "r", vars);
   const bottom = evalGeomFormula(textRect.b ?? "b", vars);
 
-  const mappedLeft = box.x + (left / pathW) * box.cx;
-  const mappedTop = box.y + (top / pathH) * box.cy;
-  const mappedRight = box.x + (right / pathW) * box.cx;
-  const mappedBottom = box.y + (bottom / pathH) * box.cy;
+  const mappedLeft = box.x + (left / coordW) * box.cx;
+  const mappedTop = box.y + (top / coordH) * box.cy;
+  const mappedRight = box.x + (right / coordW) * box.cx;
+  const mappedBottom = box.y + (bottom / coordH) * box.cy;
 
   return {
     x: Math.min(mappedLeft, mappedRight),
@@ -1943,50 +1983,20 @@ function autoFitNoWrapTextBody(ctx, textBody, width, height, defaultStyle) {
   };
 }
 
-function drawTextBodyInBox(ctx, textBody, boxPx) {
-  if (!textBody) {
-    return;
-  }
-
-  const left = boxPx.x + (textBody.leftInset || 0);
-  const top = boxPx.y + (textBody.topInset || 0);
-  const width = Math.max(0, boxPx.cx - (textBody.leftInset || 0) - (textBody.rightInset || 0));
-  const height = Math.max(0, boxPx.cy - (textBody.topInset || 0) - (textBody.bottomInset || 0));
-
-  const defaultStyle = {
-    fontFamily: "Calibri",
-    eastAsiaFont: null,
-    complexScriptFont: null,
-    fontSizePt: 18,
-    color: "#000000",
-    alpha: 1,
-    bold: false,
-    italic: false,
-    spacing: 0
-  };
-
-  if (String(textBody.direction || "horz").toLowerCase() === "eavert") {
-    drawVerticalTextBodyInBox(ctx, textBody, boxPx, defaultStyle);
-    return;
-  }
-
-  let effectiveTextBody = textBody;
-  if (String(textBody.wrap || "square").toLowerCase() === "none" && textBody.autoFit === "norm") {
-    effectiveTextBody = autoFitNoWrapTextBody(ctx, textBody, width, height, defaultStyle);
-  }
-
+function buildTextBodyLayout(ctx, textBody, contentWidth, defaultStyle) {
   const paragraphLayouts = [];
   let totalHeight = 0;
+  let maxContentWidth = 0;
   const autoNumberState = new Map();
-  const wrapEnabled = String(effectiveTextBody.wrap || "square").toLowerCase() !== "none";
+  const wrapEnabled = String(textBody.wrap || "square").toLowerCase() !== "none";
 
-  for (const paragraph of ensureArray(effectiveTextBody.paragraphs)) {
+  for (const paragraph of ensureArray(textBody.paragraphs)) {
     const before = Math.max(0, (paragraph.spaceBefore || 0) / 100) * PX_PER_PT;
     const after = Math.max(0, (paragraph.spaceAfter || 0) / 100) * PX_PER_PT;
     const marginLeft = Math.max(0, paragraph.marginLeft || 0);
     const marginRight = Math.max(0, paragraph.marginRight || 0);
     const indent = paragraph.indent || 0;
-    const paragraphWidth = Math.max(0, width - marginLeft - marginRight);
+    const paragraphWidth = Math.max(0, contentWidth - marginLeft - marginRight);
     const lines = wrapParagraphRuns(ctx, paragraph, paragraphWidth, defaultStyle, { wrapEnabled });
     if (!lines.length) {
       continue;
@@ -2003,6 +2013,7 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
     }
     const heights = lines.map((line) => lineHeightPx(line));
     const paraHeight = before + heights.reduce((sum, h) => sum + h, 0) + after;
+    const widestLine = lines.reduce((acc, line) => Math.max(acc, lineDisplayWidth(line)), 0);
     paragraphLayouts.push({
       lines,
       heights,
@@ -2015,14 +2026,98 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
       bulletLabel
     });
     totalHeight += paraHeight;
+    maxContentWidth = Math.max(maxContentWidth, marginLeft + widestLine + marginRight);
   }
+
+  return {
+    paragraphLayouts,
+    totalHeight,
+    maxContentWidth,
+    wrapEnabled
+  };
+}
+
+const DEFAULT_TEXT_STYLE = {
+  fontFamily: "Calibri",
+  eastAsiaFont: null,
+  complexScriptFont: null,
+  fontSizePt: 18,
+  color: "#000000",
+  alpha: 1,
+  bold: false,
+  italic: false,
+  spacing: 0
+};
+
+function shouldExpandTextBoxForAutoFit(element, textBody) {
+  if (!element || !textBody || textBody.autoFit !== "shape" || element.type !== "text") {
+    return false;
+  }
+  const fillType = element.fill?.type || null;
+  return (fillType === null || fillType === "none") && !element.line;
+}
+
+function expandTextBoxForAutoFit(ctx, element, boxPx, textBoxPx, textBody) {
+  if (!shouldExpandTextBoxForAutoFit(element, textBody)) {
+    return { boxPx, textBoxPx };
+  }
+
+  const contentWidth = Math.max(0, textBoxPx.cx - (textBody.leftInset || 0) - (textBody.rightInset || 0));
+  const { totalHeight, maxContentWidth, wrapEnabled } = buildTextBodyLayout(ctx, textBody, contentWidth, DEFAULT_TEXT_STYLE);
+  const requiredWidth = (textBody.leftInset || 0) + (textBody.rightInset || 0) + maxContentWidth;
+  const requiredHeight = (textBody.topInset || 0) + (textBody.bottomInset || 0) + totalHeight;
+  const expandedTextBox = {
+    ...textBoxPx,
+    cx: wrapEnabled ? textBoxPx.cx : Math.max(textBoxPx.cx, requiredWidth),
+    cy: Math.max(textBoxPx.cy, requiredHeight)
+  };
+  return {
+    boxPx: {
+      ...boxPx,
+      cx: boxPx.cx + (expandedTextBox.cx - textBoxPx.cx),
+      cy: boxPx.cy + (expandedTextBox.cy - textBoxPx.cy)
+    },
+    textBoxPx: expandedTextBox
+  };
+}
+
+function shouldClipTextBody(element, textBody) {
+  return !(element?.isTextBox && textBody?.autoFit === "none");
+}
+
+function drawTextBodyInBox(ctx, textBody, boxPx, options = {}) {
+  if (!textBody) {
+    return;
+  }
+
+  const left = boxPx.x + (textBody.leftInset || 0);
+  const top = boxPx.y + (textBody.topInset || 0);
+  const width = Math.max(0, boxPx.cx - (textBody.leftInset || 0) - (textBody.rightInset || 0));
+  const height = Math.max(0, boxPx.cy - (textBody.topInset || 0) - (textBody.bottomInset || 0));
+
+  if (String(textBody.direction || "horz").toLowerCase() === "eavert") {
+    drawVerticalTextBodyInBox(ctx, textBody, boxPx, DEFAULT_TEXT_STYLE);
+    return;
+  }
+
+  let effectiveTextBody = textBody;
+  if (String(textBody.wrap || "square").toLowerCase() === "none" && textBody.autoFit === "norm") {
+    effectiveTextBody = autoFitNoWrapTextBody(ctx, textBody, width, height, DEFAULT_TEXT_STYLE);
+  }
+
+  const {
+    paragraphLayouts,
+    totalHeight,
+    wrapEnabled
+  } = buildTextBodyLayout(ctx, effectiveTextBody, width, DEFAULT_TEXT_STYLE);
 
   if (!paragraphLayouts.length) {
     return;
   }
 
+  const clipText = options.clip !== false;
   ctx.save();
-  if (wrapEnabled) {
+  if (wrapEnabled && clipText) {
     ctx.beginPath();
     ctx.rect(left, top, width, height);
     ctx.clip();
@@ -2049,7 +2144,7 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
       );
 
       if (li === 0 && (layout.bullet?.type === "char" || layout.bulletLabel)) {
-        const baseStyle = line.segments[0]?.style || defaultStyle;
+        const baseStyle = line.segments[0]?.style || DEFAULT_TEXT_STYLE;
         const bulletChar = layout.bullet?.type === "char"
           ? normalizeBulletChar(layout.bullet)
           : null;
@@ -2107,9 +2202,12 @@ function drawText(ctx, element, scaleX, scaleY) {
   const renderGeometry = resolveRenderableGeometry(element);
   const textBox = renderGeometry ? resolveGeometryTextBox(box, renderGeometry) : box;
   const textBody = scaleTextBodyForCanvas(element.text, scaleX, scaleY);
+  const autoFitBox = expandTextBoxForAutoFit(ctx, element, box, textBox, textBody);
 
-  withElementTransform(ctx, box, () => {
-    drawTextBodyInBox(ctx, textBody, textBox);
+  withElementTransform(ctx, autoFitBox.boxPx, () => {
+    drawTextBodyInBox(ctx, textBody, autoFitBox.textBoxPx, {
+      clip: shouldClipTextBody(element, textBody)
+    });
   });
 }
 
