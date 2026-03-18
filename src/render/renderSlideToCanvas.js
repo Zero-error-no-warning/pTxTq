@@ -1840,6 +1840,54 @@ function drawVerticalTextBodyInBox(ctx, textBody, boxPx, defaultStyle) {
   ctx.restore();
 }
 
+function scaleRunStyleForCanvas(style, fontScale) {
+  if (!style) {
+    return style;
+  }
+  return {
+    ...style,
+    fontSizePt: (style.fontSizePt || 0) * fontScale
+  };
+}
+
+function scaleParagraphForCanvas(paragraph, scaleX, fontScale) {
+  return {
+    ...paragraph,
+    marginLeft: (paragraph?.marginLeft || 0) * scaleX,
+    marginRight: (paragraph?.marginRight || 0) * scaleX,
+    indent: (paragraph?.indent || 0) * scaleX,
+    defaultTabSize: (paragraph?.defaultTabSize || 0) * scaleX,
+    spaceBefore: (paragraph?.spaceBefore || 0) * fontScale,
+    spaceAfter: (paragraph?.spaceAfter || 0) * fontScale,
+    lineSpacingPt: (paragraph?.lineSpacingPt || 0) * fontScale,
+    bullet: paragraph?.bullet ? {
+      ...paragraph.bullet,
+      sizePt: paragraph.bullet.sizePt ? paragraph.bullet.sizePt * fontScale : paragraph.bullet.sizePt
+    } : paragraph?.bullet,
+    runs: ensureArray(paragraph?.runs).map((run) => ({
+      ...run,
+      style: scaleRunStyleForCanvas(run?.style, fontScale)
+    }))
+  };
+}
+
+function scaleTextBodyForCanvas(textBody, scaleX, scaleY, extraInsets = {}) {
+  if (!textBody) {
+    return textBody;
+  }
+  const fontScale = (scaleX + scaleY) / 2;
+  return {
+    ...textBody,
+    leftInset: ((textBody.leftInset || 0) + (extraInsets.left || 0)) * scaleX,
+    rightInset: ((textBody.rightInset || 0) + (extraInsets.right || 0)) * scaleX,
+    topInset: ((textBody.topInset || 0) + (extraInsets.top || 0)) * scaleY,
+    bottomInset: ((textBody.bottomInset || 0) + (extraInsets.bottom || 0)) * scaleY,
+    paragraphs: ensureArray(textBody.paragraphs).map((paragraph) => (
+      scaleParagraphForCanvas(paragraph, scaleX, fontScale)
+    ))
+  };
+}
+
 function scaleParagraphForAutoFit(paragraph, scale) {
   return {
     ...paragraph,
@@ -2057,22 +2105,10 @@ function drawText(ctx, element, scaleX, scaleY) {
   const box = toPxElement(element, scaleX, scaleY);
   const renderGeometry = resolveRenderableGeometry(element);
   const textBox = renderGeometry ? resolveGeometryTextBox(box, renderGeometry) : box;
-  const paragraphs = ensureArray(element.text?.paragraphs).map((paragraph) => ({
-    ...paragraph,
-    marginLeft: (paragraph.marginLeft || 0) * scaleX,
-    marginRight: (paragraph.marginRight || 0) * scaleX,
-    indent: (paragraph.indent || 0) * scaleX
-  }));
+  const textBody = scaleTextBodyForCanvas(element.text, scaleX, scaleY);
 
   withElementTransform(ctx, box, () => {
-    drawTextBodyInBox(ctx, {
-      ...element.text,
-      paragraphs,
-      leftInset: (element.text?.leftInset || 0) * scaleX,
-      rightInset: (element.text?.rightInset || 0) * scaleX,
-      topInset: (element.text?.topInset || 0) * scaleY,
-      bottomInset: (element.text?.bottomInset || 0) * scaleY
-    }, textBox);
+    drawTextBodyInBox(ctx, textBody, textBox);
   });
 }
 
@@ -2152,18 +2188,13 @@ function drawTableCellText(ctx, cell, x, y, width, height, scaleX, scaleY) {
     return;
   }
   const textBody = {
-    ...cell.text,
-    paragraphs: ensureArray(cell.text.paragraphs).map((paragraph) => ({
-      ...paragraph,
-      marginLeft: (paragraph.marginLeft || 0) * scaleX,
-      marginRight: (paragraph.marginRight || 0) * scaleX,
-      indent: (paragraph.indent || 0) * scaleX
-    })),
+    ...scaleTextBodyForCanvas(cell.text, scaleX, scaleY, {
+      left: cell.marginLeft || 0,
+      right: cell.marginRight || 0,
+      top: cell.marginTop || 0,
+      bottom: cell.marginBottom || 0
+    }),
     verticalAlign: cell.verticalAlign || cell.text.verticalAlign,
-    leftInset: ((cell.text.leftInset || 0) + (cell.marginLeft || 0)) * scaleX,
-    rightInset: ((cell.text.rightInset || 0) + (cell.marginRight || 0)) * scaleX,
-    topInset: ((cell.text.topInset || 0) + (cell.marginTop || 0)) * scaleY,
-    bottomInset: ((cell.text.bottomInset || 0) + (cell.marginBottom || 0)) * scaleY
   };
   drawTextBodyInBox(ctx, textBody, { x, y, cx: width, cy: height });
 }
