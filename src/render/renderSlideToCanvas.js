@@ -13,6 +13,7 @@ import { resolvePresetShapeGeometry } from "../utils/presetShapeGeometry.js";
 import { buildPresetShapeParts } from "../utils/presetShape.js";
 
 const PX_PER_PT = 96 / 72;
+const BASE_EMU_TO_PX = emuToPx(1);
 
 function toCanvasColor(color, alpha = 1) {
   if (!color) {
@@ -1875,7 +1876,7 @@ function scaleTextBodyForCanvas(textBody, scaleX, scaleY, extraInsets = {}) {
   if (!textBody) {
     return textBody;
   }
-  const fontScale = (scaleX + scaleY) / 2;
+  const fontScale = ((scaleX + scaleY) / 2) / BASE_EMU_TO_PX;
   return {
     ...textBody,
     leftInset: ((textBody.leftInset || 0) + (extraInsets.left || 0)) * scaleX,
