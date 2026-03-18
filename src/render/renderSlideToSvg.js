@@ -3,9 +3,12 @@ import { clamp, ensureArray } from "../utils/object.js";
 import {
   buildGeometryVars,
   evalGeomFormula,
+  fitGeometryExtents,
   resolveOoxmlArcFromCurrentPoint,
   splitArcSweep
 } from "../utils/geometry.js";
+import { resolvePresetShapeGeometry } from "../utils/presetShapeGeometry.js";
+import { buildPresetShapeParts } from "../utils/presetShape.js";
 
 const EMU_PER_PT = 12700;
 
@@ -60,7 +63,16 @@ function transformAttr(element) {
 
 function isLineLikeShapeType(shapeType) {
   const normalized = String(shapeType || "").toLowerCase();
-  return normalized === "line" || normalized.includes("connector");
+  return normalized === "line"
+    || normalized === "straightconnector1"
+    || normalized === "bentconnector2"
+    || normalized === "bentconnector3"
+    || normalized === "bentconnector4"
+    || normalized === "bentconnector5"
+    || normalized === "curvedconnector2"
+    || normalized === "curvedconnector3"
+    || normalized === "curvedconnector4"
+    || normalized === "curvedconnector5";
 }
 
 const DASH_PRESET_FACTORS = {
@@ -85,6 +97,29 @@ function lineCapToSvg(cap) {
     default:
       return "butt";
   }
+}
+
+function lineJoinType(join) {
+  return String(join?.type || join || "miter").toLowerCase();
+}
+
+function lineJoinToSvg(join) {
+  switch (lineJoinType(join)) {
+    case "round":
+      return "round";
+    case "bevel":
+      return "bevel";
+    default:
+      return "miter";
+  }
+}
+
+function lineMiterLimit(join) {
+  const numeric = Number(join?.limit);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 10;
+  }
+  return Math.max(1, numeric > 1000 ? numeric / 100000 : numeric);
 }
 
 function lineEndScale(value, sm, med, lg) {
@@ -137,6 +172,8 @@ function lineStrokeProps(line) {
     stroke: colorWithAlpha(line.color, line.alpha ?? 1),
     strokeWidth,
     lineCap: lineCapToSvg(line.cap),
+    lineJoin: lineJoinToSvg(line.join),
+    miterLimit: lineMiterLimit(line.join),
     dashArray: lineDashArray(line, strokeWidth)
   };
 }
@@ -147,11 +184,86 @@ function shapeStrokeAttrs(line) {
     return "stroke=\"none\"";
   }
   const dashAttr = stroke.dashArray ? ` stroke-dasharray=\"${stroke.dashArray}\"` : "";
-  return `stroke=\"${stroke.stroke}\" stroke-width=\"${stroke.strokeWidth}\" stroke-linecap=\"${stroke.lineCap}\"${dashAttr}`;
+  return `stroke=\"${stroke.stroke}\" stroke-width=\"${stroke.strokeWidth}\" stroke-linecap=\"${stroke.lineCap}\" stroke-linejoin=\"${stroke.lineJoin}\" stroke-miterlimit=\"${stroke.miterLimit}\"${dashAttr}`;
+}
+
+function svgSafeId(value) {
+  return String(value || "").replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function shapeGradientFill(element) {
+  const fill = element?.fill;
+  if (!fill || fill.type === "none") {
+    return { defs: "", fill: "none" };
+  }
+  if (fill.type !== "gradient" || !ensureArray(fill.stops).length) {
+    return {
+      defs: "",
+      fill: colorWithAlpha(fill.color, fill.alpha ?? 1)
+    };
+  }
+
+  const gradientId = svgSafeId(`shapeGrad-${element?.id || "shape"}-${Math.round(element?.x || 0)}-${Math.round(element?.y || 0)}`);
+  const stops = ensureArray(fill.stops).map((stop) => (
+    `<stop offset=\"${clamp((Number(stop?.pos) || 0) / 1000, 0, 100)}%\" stop-color=\"${colorWithAlpha(stop?.color || "#FFFFFF", stop?.alpha ?? 1)}\" />`
+  )).join("");
+
+  let defs = "";
+  if (fill.gradientType === "path" && fill.path === "circle") {
+    defs = `<defs><radialGradient id=\"${gradientId}\" cx=\"50%\" cy=\"50%\" r=\"75%\">${stops}</radialGradient></defs>`;
+  } else {
+    const angle = Number(fill.angle) || 0;
+    const rad = (angle * Math.PI) / 180;
+    const x1 = 50 - Math.cos(rad) * 50;
+    const y1 = 50 - Math.sin(rad) * 50;
+    const x2 = 50 + Math.cos(rad) * 50;
+    const y2 = 50 + Math.sin(rad) * 50;
+    defs = `<defs><linearGradient id=\"${gradientId}\" x1=\"${x1}%\" y1=\"${y1}%\" x2=\"${x2}%\" y2=\"${y2}%\">${stops}</linearGradient></defs>`;
+  }
+
+  return {
+    defs,
+    fill: `url(#${gradientId})`
+  };
 }
 
 function pointList(points) {
   return points.map((p) => `${p.x},${p.y}`).join(" ");
+}
+
+function loopsPathData(loops) {
+  const parts = [];
+  for (const loop of ensureArray(loops)) {
+    const points = ensureArray(loop);
+    if (!points.length) {
+      continue;
+    }
+    parts.push(`M ${points[0].x} ${points[0].y}`);
+    for (let i = 1; i < points.length; i += 1) {
+      parts.push(`L ${points[i].x} ${points[i].y}`);
+    }
+    parts.push("Z");
+  }
+  return parts.join(" ");
+}
+
+function renderPresetShapePart(part, commonAttrs, transformAttrs) {
+  switch (part?.kind) {
+    case "polygon":
+      return `<polygon points=\"${pointList(ensureArray(part.points))}\" ${commonAttrs}${transformAttrs} />`;
+    case "loops":
+      return `<path d=\"${loopsPathData(part.loops)}\" ${commonAttrs}${transformAttrs} />`;
+    case "polyline":
+      return `<polyline points=\"${pointList(ensureArray(part.points))}\" fill=\"none\" ${commonAttrs}${transformAttrs} />`;
+    case "ellipse":
+      return `<ellipse cx=\"${part.cx}\" cy=\"${part.cy}\" rx=\"${part.rx}\" ry=\"${part.ry}\" ${commonAttrs}${transformAttrs} />`;
+    case "roundRect":
+      return `<rect x=\"${part.x}\" y=\"${part.y}\" width=\"${part.w}\" height=\"${part.h}\" rx=\"${part.r}\" ry=\"${part.r}\" ${commonAttrs}${transformAttrs} />`;
+    case "rect":
+      return `<rect x=\"${part.x}\" y=\"${part.y}\" width=\"${part.w}\" height=\"${part.h}\" ${commonAttrs}${transformAttrs} />`;
+    default:
+      return "";
+  }
 }
 
 function rotatePoint(point, center, rotationDeg) {
@@ -299,7 +411,7 @@ function mapGeometryPoint(element, pathW, pathH, x, y) {
 function buildCustomGeometryPathData(element, geometry, path) {
   const pathW = Math.max(1, Number(path?.w || geometry?.pathDefaults?.w || 21600));
   const pathH = Math.max(1, Number(path?.h || geometry?.pathDefaults?.h || 21600));
-  const vars = buildGeometryVars(geometry, pathW, pathH);
+  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, element.cx, element.cy));
 
   const parts = [];
   let currentRaw = null;
@@ -424,7 +536,9 @@ function renderCustomGeometryPrimitive(element, options = {}) {
     return "";
   }
 
-  const fillColor = colorWithAlpha(element.fill?.color, element.fill?.alpha ?? 1);
+  const fillInfo = options.forceNoFill === true
+    ? { defs: "", fill: "none" }
+    : shapeGradientFill(element);
   const pieces = [];
   const forceNoFill = options.forceNoFill === true;
 
@@ -433,12 +547,22 @@ function renderCustomGeometryPrimitive(element, options = {}) {
     if (!d) {
       continue;
     }
-    const fill = forceNoFill || !pathFillEnabled(path) ? "none" : fillColor;
+    const fill = forceNoFill || !pathFillEnabled(path) ? "none" : fillInfo.fill;
     const strokeAttrs = pathStrokeEnabled(path) ? shapeStrokeAttrs(element.line) : "stroke=\"none\"";
     pieces.push(`<path d=\"${d}\" fill=\"${fill}\" ${strokeAttrs}${transformAttr(element)} />`);
   }
 
-  return pieces.join("");
+  return `${fillInfo.defs}${pieces.join("")}`;
+}
+
+function resolveRenderableGeometry(element) {
+  if (element?.geometry?.kind === "cust") {
+    return element.geometry;
+  }
+  if (element?.geometry?.kind === "prst") {
+    return resolvePresetShapeGeometry(element.shapeType || element.geometry?.preset, element.geometry);
+  }
+  return null;
 }
 
 function renderLineEnd(lineEnd, tip, other, strokeColor, strokeWidth) {
@@ -509,60 +633,70 @@ function renderLineEnd(lineEnd, tip, other, strokeColor, strokeWidth) {
 }
 
 function renderLinePrimitive(element) {
-  if (element?.geometry?.kind === "cust") {
-    const custom = renderCustomGeometryPrimitive(element, { forceNoFill: true });
+  const renderGeometry = resolveRenderableGeometry(element);
+  const renderElement = renderGeometry ? { ...element, geometry: renderGeometry } : element;
+  if (renderGeometry?.kind === "cust") {
+    const custom = renderCustomGeometryPrimitive(renderElement, { forceNoFill: true });
     if (custom) {
       return custom;
     }
   }
 
-  const stroke = lineStrokeProps(element.line);
+  const stroke = lineStrokeProps(renderElement.line);
   if (!stroke) {
     return "";
   }
 
-  const { start, end } = lineEndpoints(element);
+  const { start, end } = lineEndpoints(renderElement);
   const dashAttr = stroke.dashArray ? ` stroke-dasharray=\"${stroke.dashArray}\"` : "";
-  const lineNode = `<line x1=\"${start.x}\" y1=\"${start.y}\" x2=\"${end.x}\" y2=\"${end.y}\" stroke=\"${stroke.stroke}\" stroke-width=\"${stroke.strokeWidth}\" stroke-linecap=\"${stroke.lineCap}\"${dashAttr} />`;
-  const headNode = renderLineEnd(element.line?.headEnd, start, end, stroke.stroke, stroke.strokeWidth);
-  const tailNode = renderLineEnd(element.line?.tailEnd, end, start, stroke.stroke, stroke.strokeWidth);
+  const lineNode = `<line x1=\"${start.x}\" y1=\"${start.y}\" x2=\"${end.x}\" y2=\"${end.y}\" stroke=\"${stroke.stroke}\" stroke-width=\"${stroke.strokeWidth}\" stroke-linecap=\"${stroke.lineCap}\" stroke-linejoin=\"${stroke.lineJoin}\" stroke-miterlimit=\"${stroke.miterLimit}\"${dashAttr} />`;
+  const headNode = renderLineEnd(renderElement.line?.headEnd, start, end, stroke.stroke, stroke.strokeWidth);
+  const tailNode = renderLineEnd(renderElement.line?.tailEnd, end, start, stroke.stroke, stroke.strokeWidth);
   return `${lineNode}${headNode}${tailNode}`;
 }
 
 function renderShapePrimitive(element) {
-  if (element?.geometry?.kind === "cust") {
-    const custom = renderCustomGeometryPrimitive(element);
+  const renderGeometry = resolveRenderableGeometry(element);
+  const renderElement = renderGeometry ? { ...element, geometry: renderGeometry } : element;
+  if (renderGeometry?.kind === "cust") {
+    const custom = renderCustomGeometryPrimitive(renderElement);
     if (custom) {
       return custom;
     }
   }
 
-  const shapeType = String(element.shapeType || "rect").toLowerCase();
+  const shapeType = String(renderElement.shapeType || "rect").toLowerCase();
   if (isLineLikeShapeType(shapeType)) {
-    return renderLinePrimitive(element);
+    return renderLinePrimitive(renderElement);
   }
 
-  const fill = colorWithAlpha(element.fill?.color, element.fill?.alpha ?? 1);
-  const common = `fill=\"${fill}\" ${shapeStrokeAttrs(element.line)}`;
-  const points = shapePoints(shapeType, element);
-  if (points) {
-    return `<polygon points=\"${pointList(points)}\" ${common}${transformAttr(element)} />`;
+  const fillInfo = shapeGradientFill(renderElement);
+  const common = `fill=\"${fillInfo.fill}\" ${shapeStrokeAttrs(renderElement.line)}`;
+  const transform = transformAttr(renderElement);
+  const presetParts = buildPresetShapeParts(shapeType, {
+    x: renderElement.x,
+    y: renderElement.y,
+    cx: renderElement.cx,
+    cy: renderElement.cy
+  }, renderElement);
+  if (presetParts?.length) {
+    return `${fillInfo.defs}${presetParts.map((part) => renderPresetShapePart(part, common, transform)).join("")}`;
   }
 
   switch (shapeType) {
     case "ellipse": {
-      const cx = element.x + element.cx / 2;
-      const cy = element.y + element.cy / 2;
-      const rx = element.cx / 2;
-      const ry = element.cy / 2;
-      return `<ellipse cx=\"${cx}\" cy=\"${cy}\" rx=\"${rx}\" ry=\"${ry}\" ${common}${transformAttr(element)} />`;
+      const cx = renderElement.x + renderElement.cx / 2;
+      const cy = renderElement.y + renderElement.cy / 2;
+      const rx = renderElement.cx / 2;
+      const ry = renderElement.cy / 2;
+      return `${fillInfo.defs}<ellipse cx=\"${cx}\" cy=\"${cy}\" rx=\"${rx}\" ry=\"${ry}\" ${common}${transformAttr(renderElement)} />`;
     }
     case "roundrect": {
-      const rx = Math.min(element.cx, element.cy) * 0.08;
-      return `<rect x=\"${element.x}\" y=\"${element.y}\" width=\"${element.cx}\" height=\"${element.cy}\" rx=\"${rx}\" ry=\"${rx}\" ${common}${transformAttr(element)} />`;
+      const rx = Math.min(renderElement.cx, renderElement.cy) * 0.08;
+      return `${fillInfo.defs}<rect x=\"${renderElement.x}\" y=\"${renderElement.y}\" width=\"${renderElement.cx}\" height=\"${renderElement.cy}\" rx=\"${rx}\" ry=\"${rx}\" ${common}${transformAttr(renderElement)} />`;
     }
     default:
-      return `<rect x=\"${element.x}\" y=\"${element.y}\" width=\"${element.cx}\" height=\"${element.cy}\" ${common}${transformAttr(element)} />`;
+      return `${fillInfo.defs}<rect x=\"${renderElement.x}\" y=\"${renderElement.y}\" width=\"${renderElement.cx}\" height=\"${renderElement.cy}\" ${common}${transformAttr(renderElement)} />`;
   }
 }
 
