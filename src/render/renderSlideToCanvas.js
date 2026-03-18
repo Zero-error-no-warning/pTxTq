@@ -1971,7 +1971,7 @@ function drawTextBodyInBox(ctx, textBody, boxPx) {
   }
 
   let effectiveTextBody = textBody;
-  if (String(textBody.wrap || "square").toLowerCase() === "none" && textBody.autoFit === "shape") {
+  if (String(textBody.wrap || "square").toLowerCase() === "none" && textBody.autoFit === "norm") {
     effectiveTextBody = autoFitNoWrapTextBody(ctx, textBody, width, height, defaultStyle);
   }
 
