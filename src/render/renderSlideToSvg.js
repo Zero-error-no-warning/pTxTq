@@ -408,10 +408,50 @@ function mapGeometryPoint(element, pathW, pathH, x, y) {
   };
 }
 
+const ASPECT_FIT_PRESET_GEOMETRIES = new Set([
+  "leftarrow",
+  "rightarrow",
+  "uparrow",
+  "downarrow",
+  "leftrightarrow",
+  "updownarrow",
+  "quadarrow",
+  "leftrightuparrow",
+  "leftuparrow",
+  "notchedrightarrow",
+  "leftarrowcallout",
+  "rightarrowcallout",
+  "uparrowcallout",
+  "downarrowcallout",
+  "leftrightarrowcallout",
+  "quadarrowcallout",
+  "leftcirculararrow",
+  "leftrightcirculararrow"
+]);
+
+function resolveGeometryCoordSpace(geometry, pathW, pathH, boxW, boxH) {
+  const presetKey = String(geometry?.preset || "").toLowerCase();
+  const isPresetGeometry = ASPECT_FIT_PRESET_GEOMETRIES.has(presetKey);
+  if (!isPresetGeometry) {
+    return {
+      vars: buildGeometryVars(geometry, pathW, pathH),
+      coordW: pathW,
+      coordH: pathH
+    };
+  }
+
+  const fit = fitGeometryExtents(pathW, pathH, boxW, boxH);
+  return {
+    vars: buildGeometryVars(geometry, pathW, pathH, fit),
+    coordW: Math.max(1, Number(fit.shapeW || pathW)),
+    coordH: Math.max(1, Number(fit.shapeH || pathH))
+  };
+}
+
 function buildCustomGeometryPathData(element, geometry, path) {
   const pathW = Math.max(1, Number(path?.w || geometry?.pathDefaults?.w || 21600));
   const pathH = Math.max(1, Number(path?.h || geometry?.pathDefaults?.h || 21600));
-  const vars = buildGeometryVars(geometry, pathW, pathH, fitGeometryExtents(pathW, pathH, element.cx, element.cy));
+  const { vars, coordW, coordH } = resolveGeometryCoordSpace(geometry, pathW, pathH, element.cx, element.cy);
 
   const parts = [];
   let currentRaw = null;
@@ -421,7 +461,7 @@ function buildCustomGeometryPathData(element, geometry, path) {
     if (type === "moveTo" || type === "lnTo") {
       const rawX = evalGeomFormula(cmd?.x || "0", vars);
       const rawY = evalGeomFormula(cmd?.y || "0", vars);
-      const p = mapGeometryPoint(element, pathW, pathH, rawX, rawY);
+      const p = mapGeometryPoint(element, coordW, coordH, rawX, rawY);
       parts.push(`${type === "moveTo" ? "M" : "L"} ${p.x} ${p.y}`);
       currentRaw = { x: rawX, y: rawY };
       if (type === "moveTo") {
@@ -435,15 +475,15 @@ function buildCustomGeometryPathData(element, geometry, path) {
       if (pts.length >= 2) {
         const cp = mapGeometryPoint(
           element,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[0]?.x || "0", vars),
           evalGeomFormula(pts[0]?.y || "0", vars)
         );
         const ep = mapGeometryPoint(
           element,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[1]?.x || "0", vars),
           evalGeomFormula(pts[1]?.y || "0", vars)
         );
@@ -461,22 +501,22 @@ function buildCustomGeometryPathData(element, geometry, path) {
       if (pts.length >= 3) {
         const cp1 = mapGeometryPoint(
           element,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[0]?.x || "0", vars),
           evalGeomFormula(pts[0]?.y || "0", vars)
         );
         const cp2 = mapGeometryPoint(
           element,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[1]?.x || "0", vars),
           evalGeomFormula(pts[1]?.y || "0", vars)
         );
         const ep = mapGeometryPoint(
           element,
-          pathW,
-          pathH,
+          coordW,
+          coordH,
           evalGeomFormula(pts[2]?.x || "0", vars),
           evalGeomFormula(pts[2]?.y || "0", vars)
         );
@@ -496,8 +536,8 @@ function buildCustomGeometryPathData(element, geometry, path) {
       const swAng = evalGeomFormula(cmd?.swAng || "0", vars);
       const arc = resolveOoxmlArcFromCurrentPoint(currentRaw.x, currentRaw.y, rxRaw, ryRaw, stAng, swAng);
       if (arc) {
-        const rx = Math.abs((arc.rx / pathW) * element.cx);
-        const ry = Math.abs((arc.ry / pathH) * element.cy);
+        const rx = Math.abs((arc.rx / coordW) * element.cx);
+        const ry = Math.abs((arc.ry / coordH) * element.cy);
         const chunks = splitArcSweep(arc.sweepParam);
 
         let segStart = arc.startParam;
@@ -507,7 +547,7 @@ function buildCustomGeometryPathData(element, geometry, path) {
             x: arc.cx + arc.rx * Math.cos(segEnd),
             y: arc.cy + arc.ry * Math.sin(segEnd)
           };
-          const end = mapGeometryPoint(element, pathW, pathH, endRaw.x, endRaw.y);
+          const end = mapGeometryPoint(element, coordW, coordH, endRaw.x, endRaw.y);
           const largeArcFlag = Math.abs(sweepChunk) > Math.PI ? 1 : 0;
           const sweepFlag = sweepChunk >= 0 ? 1 : 0;
           parts.push(`A ${rx} ${ry} 0 ${largeArcFlag} ${sweepFlag} ${end.x} ${end.y}`);
