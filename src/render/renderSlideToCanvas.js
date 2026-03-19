@@ -9,6 +9,7 @@ import {
   resolveOoxmlArcFromCurrentPoint,
   splitArcSweep
 } from "../utils/geometry.js";
+import { shouldAspectFitPresetGeometry } from "../utils/aspectFitPresetGeometry.js";
 import { resolvePresetShapeGeometry } from "../utils/presetShapeGeometry.js";
 import { buildPresetShapeParts } from "../utils/presetShape.js";
 
@@ -582,30 +583,9 @@ function mapGeometryPoint(box, pathW, pathH, x, y) {
   };
 }
 
-const ASPECT_FIT_PRESET_GEOMETRIES = new Set([
-  "leftarrow",
-  "rightarrow",
-  "uparrow",
-  "downarrow",
-  "leftrightarrow",
-  "updownarrow",
-  "quadarrow",
-  "leftrightuparrow",
-  "leftuparrow",
-  "notchedrightarrow",
-  "leftarrowcallout",
-  "rightarrowcallout",
-  "uparrowcallout",
-  "downarrowcallout",
-  "leftrightarrowcallout",
-  "quadarrowcallout",
-  "leftcirculararrow",
-  "leftrightcirculararrow"
-]);
-
 function resolveGeometryCoordSpace(geometry, pathW, pathH, boxW, boxH) {
   const presetKey = String(geometry?.preset || "").toLowerCase();
-  const isPresetGeometry = ASPECT_FIT_PRESET_GEOMETRIES.has(presetKey);
+  const isPresetGeometry = shouldAspectFitPresetGeometry(presetKey);
   if (!isPresetGeometry) {
     return {
       vars: buildGeometryVars(geometry, pathW, pathH),
