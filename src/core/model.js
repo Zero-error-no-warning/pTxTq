@@ -770,6 +770,97 @@ function parsePointExpr(ptNode) {
   };
 }
 
+function orderedEntryAttributes(entry) {
+  return entry?.[":@"] || {};
+}
+
+function findOrderedDirectChildByName(entries, targetName) {
+  return ensureArray(entries).find((entry) => orderedEntryName(entry) === targetName) || null;
+}
+
+function findOrderedDirectChildrenByName(entries, targetName) {
+  return ensureArray(entries).filter((entry) => orderedEntryName(entry) === targetName);
+}
+
+function parseOrderedPointExpr(entry) {
+  const ptEntry = findOrderedDirectChildByName(orderedEntryChildren(entry), "a:pt");
+  const attrs = orderedEntryAttributes(ptEntry);
+  return {
+    x: String(attrs?.["@_x"] ?? "0"),
+    y: String(attrs?.["@_y"] ?? "0")
+  };
+}
+
+function parseOrderedPathCommandList(pathEntry) {
+  const commands = [];
+
+  for (const entry of orderedEntryChildren(pathEntry)) {
+    const name = orderedEntryName(entry);
+    switch (name) {
+      case "a:moveTo": {
+        const pt = parseOrderedPointExpr(entry);
+        commands.push({ type: "moveTo", x: pt.x, y: pt.y });
+        break;
+      }
+      case "a:lnTo": {
+        const pt = parseOrderedPointExpr(entry);
+        commands.push({ type: "lnTo", x: pt.x, y: pt.y });
+        break;
+      }
+      case "a:arcTo": {
+        const attrs = orderedEntryAttributes(entry);
+        commands.push({
+          type: "arcTo",
+          wR: String(attrs?.["@_wR"] ?? "0"),
+          hR: String(attrs?.["@_hR"] ?? "0"),
+          stAng: String(attrs?.["@_stAng"] ?? "0"),
+          swAng: String(attrs?.["@_swAng"] ?? "0")
+        });
+        break;
+      }
+      case "a:quadBezTo": {
+        const points = findOrderedDirectChildrenByName(orderedEntryChildren(entry), "a:pt").map((ptEntry) => {
+          const attrs = orderedEntryAttributes(ptEntry);
+          return {
+            x: String(attrs?.["@_x"] ?? "0"),
+            y: String(attrs?.["@_y"] ?? "0")
+          };
+        });
+        if (points.length >= 2) {
+          commands.push({
+            type: "quadBezTo",
+            points: points.slice(0, 2)
+          });
+        }
+        break;
+      }
+      case "a:cubicBezTo": {
+        const points = findOrderedDirectChildrenByName(orderedEntryChildren(entry), "a:pt").map((ptEntry) => {
+          const attrs = orderedEntryAttributes(ptEntry);
+          return {
+            x: String(attrs?.["@_x"] ?? "0"),
+            y: String(attrs?.["@_y"] ?? "0")
+          };
+        });
+        if (points.length >= 3) {
+          commands.push({
+            type: "cubicBezTo",
+            points: points.slice(0, 3)
+          });
+        }
+        break;
+      }
+      case "a:close":
+        commands.push({ type: "close" });
+        break;
+      default:
+        break;
+    }
+  }
+
+  return commands;
+}
+
 function parsePathCommandList(pathNode) {
   const commands = [];
   const source = pathNode || {};
@@ -839,29 +930,52 @@ function parsePathCommandList(pathNode) {
   return commands;
 }
 
-function parseCustomGeometry(spPrNode) {
+function parseCustomGeometry(spPrNode, orderedSpPrEntry = null) {
   const custGeom = first(spPrNode?.["a:custGeom"]);
   if (!custGeom) {
     return null;
   }
 
+  const orderedCustGeomEntry = orderedSpPrEntry
+    ? findOrderedDirectChildByName(orderedEntryChildren(orderedSpPrEntry), "a:custGeom")
+    : null;
+  const orderedPathLstEntry = orderedCustGeomEntry
+    ? findOrderedDirectChildByName(orderedEntryChildren(orderedCustGeomEntry), "a:pathLst")
+    : null;
+  const orderedPathLstAttrs = orderedEntryAttributes(orderedPathLstEntry);
   const pathLst = first(custGeom?.["a:pathLst"]) || {};
   const pathDefaults = {
-    w: toInt(pathLst?.["@_w"], 21600),
-    h: toInt(pathLst?.["@_h"], 21600)
+    w: toInt(orderedPathLstAttrs?.["@_w"] ?? pathLst?.["@_w"], 21600),
+    h: toInt(orderedPathLstAttrs?.["@_h"] ?? pathLst?.["@_h"], 21600)
   };
 
-  const paths = ensureArray(pathLst?.["a:path"]).map((pathNode) => {
-    const path = first(pathNode) || pathNode || {};
-    return {
-      w: toInt(path?.["@_w"], pathDefaults.w || 21600),
-      h: toInt(path?.["@_h"], pathDefaults.h || 21600),
-      fill: path?.["@_fill"] || "norm",
-      stroke: path?.["@_stroke"] ?? "1",
-      extrusionOk: path?.["@_extrusionOk"] ?? "1",
-      commands: parsePathCommandList(path)
-    };
-  });
+  const orderedPathEntries = orderedPathLstEntry
+    ? findOrderedDirectChildrenByName(orderedEntryChildren(orderedPathLstEntry), "a:path")
+    : [];
+
+  const paths = orderedPathEntries.length
+    ? orderedPathEntries.map((pathEntry) => {
+      const attrs = orderedEntryAttributes(pathEntry);
+      return {
+        w: toInt(attrs?.["@_w"], pathDefaults.w || 21600),
+        h: toInt(attrs?.["@_h"], pathDefaults.h || 21600),
+        fill: attrs?.["@_fill"] || "norm",
+        stroke: attrs?.["@_stroke"] ?? "1",
+        extrusionOk: attrs?.["@_extrusionOk"] ?? "1",
+        commands: parseOrderedPathCommandList(pathEntry)
+      };
+    })
+    : ensureArray(pathLst?.["a:path"]).map((pathNode) => {
+      const path = first(pathNode) || pathNode || {};
+      return {
+        w: toInt(path?.["@_w"], pathDefaults.w || 21600),
+        h: toInt(path?.["@_h"], pathDefaults.h || 21600),
+        fill: path?.["@_fill"] || "norm",
+        stroke: path?.["@_stroke"] ?? "1",
+        extrusionOk: path?.["@_extrusionOk"] ?? "1",
+        commands: parsePathCommandList(path)
+      };
+    });
 
   return {
     kind: "cust",
@@ -880,8 +994,8 @@ function parseCustomGeometry(spPrNode) {
   };
 }
 
-function parseGeometry(spPrNode) {
-  const custom = parseCustomGeometry(spPrNode);
+function parseGeometry(spPrNode, orderedSpPrEntry = null) {
+  const custom = parseCustomGeometry(spPrNode, orderedSpPrEntry);
   if (custom) {
     return custom;
   }
@@ -968,12 +1082,15 @@ function resolveEffectiveTextBody(shapeNode, inheritedShapeNode, placeholder) {
   return merged;
 }
 
-function parseShapeElement(shapeNode, inheritedShapeNode, themeContext, masterTextStyles = null) {
+function parseShapeElement(shapeNode, inheritedShapeNode, themeContext, masterTextStyles = null, orderedShapeEntry = null) {
   const effectiveSpPr = deepMergeNodes(inheritedShapeNode?.["p:spPr"], shapeNode?.["p:spPr"]);
   const effectiveStyle = deepMergeNodes(inheritedShapeNode?.["p:style"], shapeNode?.["p:style"]);
   const placeholder = placeholderInfo(shapeNode) || placeholderInfo(inheritedShapeNode);
   const effectiveTxBody = resolveEffectiveTextBody(shapeNode, inheritedShapeNode, placeholder);
   const textStyleFallback = resolveTextStyleForPlaceholder(placeholder, masterTextStyles);
+  const orderedSpPrEntry = orderedShapeEntry
+    ? findOrderedDirectChildByName(orderedEntryChildren(orderedShapeEntry), "p:spPr")
+    : null;
 
   const common = parseShapeCommon(shapeNode, effectiveSpPr || {}, effectiveStyle || {}, themeContext);
   const fontRefColor = resolveDrawingColor(effectiveStyle?.["a:fontRef"], themeContext)?.color || null;
@@ -986,7 +1103,7 @@ function parseShapeElement(shapeNode, inheritedShapeNode, themeContext, masterTe
     fontFamily: fontFromRef || themeContext?.theme?.fontScheme?.minor?.latin || "Calibri"
   }, textStyleFallback);
 
-  const geometry = parseGeometry(effectiveSpPr || {});
+  const geometry = parseGeometry(effectiveSpPr || {}, orderedSpPrEntry);
 
   const hasText = text && text.paragraphs.some((paragraph) => paragraph.runs.some((run) => run.text.length > 0));
 
@@ -2182,6 +2299,35 @@ function buildElementOrderMap(xmlText, treePath) {
   return collectOrderedElementKeys(spTreeChildren);
 }
 
+function collectOrderedShapeEntries(entries, shapeMap = new Map()) {
+  for (const entry of ensureArray(entries)) {
+    const name = orderedEntryName(entry);
+    if (!name) {
+      continue;
+    }
+    if (name === "p:sp") {
+      const id = orderedElementId(entry);
+      if (id && !shapeMap.has(id)) {
+        shapeMap.set(id, entry);
+      }
+      continue;
+    }
+    if (DRAW_ORDER_CONTAINER_TAGS.has(name)) {
+      collectOrderedShapeEntries(orderedEntryChildren(entry), shapeMap);
+    }
+  }
+  return shapeMap;
+}
+
+function buildOrderedShapeEntryMap(xmlText, treePath) {
+  if (!xmlText) {
+    return new Map();
+  }
+  const orderedRoot = parseXmlPreserveOrder(xmlText);
+  const spTreeChildren = findOrderedChildrenByPath(orderedRoot, treePath);
+  return collectOrderedShapeEntries(spTreeChildren);
+}
+
 function sortElementsByOrder(elements, orderMap) {
   return ensureArray(elements)
     .map((element, index) => ({
@@ -2487,6 +2633,7 @@ export async function parsePresentationModel(openXmlPackage) {
   const parsedThemeCache = new Map();
   const backgroundImageCache = new Map();
   const elementOrderCache = new Map();
+  const orderedShapeEntryCache = new Map();
 
   async function getElementOrderMap(partPath, treePath) {
     if (!partPath || !openXmlPackage.hasPart(partPath)) {
@@ -2497,6 +2644,17 @@ export async function parsePresentationModel(openXmlPackage) {
       elementOrderCache.set(partPath, buildElementOrderMap(xmlText, treePath));
     }
     return elementOrderCache.get(partPath) || new Map();
+  }
+
+  async function getOrderedShapeEntryMap(partPath, treePath) {
+    if (!partPath || !openXmlPackage.hasPart(partPath)) {
+      return new Map();
+    }
+    if (!orderedShapeEntryCache.has(partPath)) {
+      const xmlText = await openXmlPackage.readText(partPath).catch(() => null);
+      orderedShapeEntryCache.set(partPath, buildOrderedShapeEntryMap(xmlText, treePath));
+    }
+    return orderedShapeEntryCache.get(partPath) || new Map();
   }
 
   const slides = [];
@@ -2548,6 +2706,7 @@ export async function parsePresentationModel(openXmlPackage) {
     const layoutPlaceholderMap = buildPlaceholderMap(layoutXml?.["p:sldLayout"]?.["p:cSld"]?.["p:spTree"]);
     const masterPlaceholderMap = buildPlaceholderMap(masterXml?.["p:sldMaster"]?.["p:cSld"]?.["p:spTree"]);
     const slideOrderMap = await getElementOrderMap(slidePath, ["p:sld", "p:cSld", "p:spTree"]);
+    const slideShapeEntryMap = await getOrderedShapeEntryMap(slidePath, ["p:sld", "p:cSld", "p:spTree"]);
     const layoutOrderMap = await getElementOrderMap(layoutPath, ["p:sldLayout", "p:cSld", "p:spTree"]);
     const masterOrderMap = await getElementOrderMap(masterPath, ["p:sldMaster", "p:cSld", "p:spTree"]);
 
@@ -2595,7 +2754,14 @@ export async function parsePresentationModel(openXmlPackage) {
 
     for (const shapeNode of ensureArray(slideTree?.["p:sp"])) {
       const inherited = resolveInheritedShape(shapeNode, layoutPlaceholderMap, masterPlaceholderMap);
-      elements.push(parseShapeElement(shapeNode, inherited, themeContext, masterTextStyles));
+      const shapeId = String(shapeNode?.["p:nvSpPr"]?.["p:cNvPr"]?.["@_id"] || "");
+      elements.push(parseShapeElement(
+        shapeNode,
+        inherited,
+        themeContext,
+        masterTextStyles,
+        slideShapeEntryMap.get(shapeId) || null
+      ));
     }
 
     for (const connectorNode of ensureArray(slideTree?.["p:cxnSp"])) {
