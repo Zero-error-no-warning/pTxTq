@@ -1477,6 +1477,7 @@ function normalizeRunStyle(style = {}, defaultStyle = {}) {
     italic: style.italic || false,
     color: style.color || defaultStyle.color || "#000000",
     alpha: style.alpha ?? defaultStyle.alpha ?? 1,
+    highlight: style.highlight || defaultStyle.highlight || null,
     underline: style.underline || false,
     spacing: style.spacing ?? defaultStyle.spacing ?? 0
   };
@@ -1492,6 +1493,8 @@ function styleKey(style) {
     style.italic ? 1 : 0,
     style.color,
     style.alpha,
+    style.highlight?.color || "",
+    style.highlight?.alpha ?? "",
     style.underline ? 1 : 0,
     style.spacing ?? 0
   ].join("|");
@@ -1553,6 +1556,16 @@ function setCanvasFont(ctx, style) {
   ctx.font = `${italic} ${weight} ${sizePx}px ${families}`;
   ctx.fillStyle = toCanvasColor(style.color, style.alpha);
   return sizePx;
+}
+
+function drawTextHighlightRect(ctx, x, top, width, height, highlight) {
+  if (!highlight?.color || !(width > 0) || !(height > 0)) {
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = toCanvasColor(highlight.color, highlight.alpha ?? 1);
+  ctx.fillRect(x, top, width, height);
+  ctx.restore();
 }
 
 function measureStyledTextWidth(ctx, text, style) {
@@ -1854,6 +1867,17 @@ function drawVerticalTextBodyInBox(ctx, textBody, boxPx, defaultStyle) {
     setCanvasFont(ctx, glyph.style);
     const slack = Math.max(0, glyph.advance - charSpacingPx(glyph.style) - (glyph.ascent + glyph.descent)) / 2;
     const baselineY = cursorY + slack + glyph.ascent;
+    const highlightWidth = Math.max(glyph.measuredWidth, glyph.height * 0.55);
+    const highlightPadX = Math.max(1, glyph.height * 0.08);
+    const highlightPadY = Math.max(1, glyph.height * 0.04);
+    drawTextHighlightRect(
+      ctx,
+      centerX - (highlightWidth / 2) - highlightPadX,
+      baselineY - glyph.ascent - highlightPadY,
+      highlightWidth + highlightPadX * 2,
+      glyph.ascent + glyph.descent + highlightPadY * 2,
+      glyph.style.highlight
+    );
     ctx.fillText(glyph.ch, centerX, baselineY);
     cursorY += glyph.advance;
   }
@@ -2153,6 +2177,17 @@ function drawTextBodyInBox(ctx, textBody, boxPx, options = {}) {
       for (const seg of line.segments) {
         setCanvasFont(ctx, seg.style);
         ctx.textBaseline = "alphabetic";
+        const metrics = measureStyleMetrics(ctx, seg.style);
+        const highlightPadX = Math.max(1, metrics.fontPx * 0.08);
+        const highlightPadY = Math.max(1, metrics.fontPx * 0.04);
+        drawTextHighlightRect(
+          ctx,
+          x - highlightPadX,
+          baselineY - metrics.ascent - highlightPadY,
+          seg.width + highlightPadX * 2,
+          metrics.ascent + metrics.descent + highlightPadY * 2,
+          seg.style.highlight
+        );
         ctx.fillText(seg.text, x, baselineY);
 
         if (seg.style.underline) {

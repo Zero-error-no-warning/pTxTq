@@ -500,6 +500,7 @@ function parseRunStyle(rPrNode, themeContext, fallbackColor, fallbackFont, defau
   const merged = deepMergeNodes(defaultRPrNode || {}, rPrNode || {}) || {};
   const color = pickTextColor(merged, themeContext, fallbackColor);
   const hasSolidFill = hasNode(merged, "a:solidFill");
+  const highlight = resolveDrawingColor(first(merged?.["a:highlight"]) || merged?.["a:highlight"], themeContext);
   const hyperlinkColor = themeContext?.resolveSchemeColor?.("hlink") || null;
   const lang = merged?.["@_lang"] || null;
   const latinTypeface = merged?.["a:latin"]?.["@_typeface"];
@@ -533,6 +534,10 @@ function parseRunStyle(rPrNode, themeContext, fallbackColor, fallbackFont, defau
     color,
     explicitColor: hasSolidFill,
     alpha: resolveDrawingColor(merged?.["a:solidFill"], themeContext)?.alpha ?? 1,
+    highlight: highlight?.color ? {
+      color: highlight.color,
+      alpha: highlight.alpha ?? 1
+    } : null,
     fontFamily: preferredFont,
     eastAsiaFont: resolvedEa || null,
     complexScriptFont: resolvedCs || null
@@ -2949,6 +2954,24 @@ export function modelColorToOpenXmlFill(fill) {
   };
 }
 
+function modelColorToOpenXmlColorChoice(colorModel) {
+  const color = colorModel?.color || colorModel;
+  if (!color) {
+    return null;
+  }
+  const srgbClr = {
+    "@_val": rgbHexNoPrefix(color)
+  };
+  if (colorModel?.alpha !== undefined && colorModel.alpha < 1) {
+    srgbClr["a:alpha"] = {
+      "@_val": alphaToPct(colorModel.alpha)
+    };
+  }
+  return {
+    "a:srgbClr": srgbClr
+  };
+}
+
 function modelLineEndToOpenXml(end) {
   if (!end) {
     return null;
@@ -3058,17 +3081,13 @@ export function buildRunNode(run) {
     rPr["@_cap"] = style.caps;
   }
 
-  rPr["a:solidFill"] = {
-    "a:srgbClr": {
-      "@_val": rgbHexNoPrefix(style.color || "#000000")
-    }
-  };
-
-  if (style.alpha !== undefined && style.alpha < 1) {
-    rPr["a:solidFill"]["a:srgbClr"]["a:alpha"] = {
-      "@_val": alphaToPct(style.alpha)
-    };
+  if (style.highlight?.color) {
+    rPr["a:highlight"] = modelColorToOpenXmlColorChoice(style.highlight);
   }
+  rPr["a:solidFill"] = modelColorToOpenXmlColorChoice({
+    color: style.color || "#000000",
+    alpha: style.alpha
+  });
 
   if (style.fontFamily) {
     rPr["a:latin"] = {
