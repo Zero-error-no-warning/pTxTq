@@ -2231,11 +2231,25 @@ async function loadImage(dataUri) {
     return null;
   }
 
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = dataUri;
+  return new Promise((resolve) => {
+    try {
+      const image = new Image();
+      let settled = false;
+      const finish = (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(value);
+      };
+
+      // Browser-decoding failures such as EMF/WMF should not abort the whole slide render.
+      image.onload = () => finish(image);
+      image.onerror = () => finish(null);
+      image.src = dataUri;
+    } catch {
+      resolve(null);
+    }
   });
 }
 

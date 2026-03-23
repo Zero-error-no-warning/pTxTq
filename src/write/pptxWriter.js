@@ -57,6 +57,12 @@ function mapMimeToExt(mimeType = "") {
       return "tiff";
     case "image/svg+xml":
       return "svg";
+    case "image/x-emf":
+    case "image/emf":
+      return "emf";
+    case "image/x-wmf":
+    case "image/wmf":
+      return "wmf";
     default:
       return "png";
   }

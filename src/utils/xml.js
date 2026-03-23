@@ -151,6 +151,10 @@ export function detectImageMimeByExt(partPath) {
     case ".tif":
     case ".tiff":
       return "image/tiff";
+    case ".emf":
+      return "image/x-emf";
+    case ".wmf":
+      return "image/x-wmf";
     default:
       return "application/octet-stream";
   }
