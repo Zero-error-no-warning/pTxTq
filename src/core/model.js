@@ -46,7 +46,7 @@ function pickTextColor(node, themeContext, fallback = "#000000") {
   if (!solid) {
     return fallback;
   }
-  const resolved = resolveDrawingColor(first(solid), themeContext);
+  const resolved = resolveDrawingColor(first(solid), themeContext, fallback);
   if (!resolved?.color) {
     return fallback;
   }
@@ -533,7 +533,7 @@ function parseRunStyle(rPrNode, themeContext, fallbackColor, fallbackFont, defau
     lang,
     color,
     explicitColor: hasSolidFill,
-    alpha: resolveDrawingColor(merged?.["a:solidFill"], themeContext)?.alpha ?? 1,
+    alpha: resolveDrawingColor(merged?.["a:solidFill"], themeContext, fallbackColor)?.alpha ?? 1,
     highlight: highlight?.color ? {
       color: highlight.color,
       alpha: highlight.alpha ?? 1
@@ -3145,21 +3145,38 @@ export function buildTextBodyNode(textBody) {
     return pNode;
   });
 
+  const bodyPr = {
+    "@_anchor": textBody.verticalAlign || "t",
+    "@_wrap": textBody.wrap || "square",
+    "@_rtlCol": textBody.rtlCol ? "1" : "0",
+    "@_fromWordArt": textBody.fromWordArt ? "1" : "0",
+    "@_anchorCtr": textBody.anchorCtr ? "1" : "0",
+    "@_forceAA": textBody.forceAA ? "1" : "0",
+    "@_upright": textBody.upright ? "1" : "0",
+    "@_numCol": toInt(textBody.numCol, 1),
+    "@_lIns": toInt(textBody.leftInset, 45720),
+    "@_tIns": toInt(textBody.topInset, 22860),
+    "@_rIns": toInt(textBody.rightInset, 45720),
+    "@_bIns": toInt(textBody.bottomInset, 22860)
+  };
+
+  if (textBody.direction && textBody.direction !== "horz") {
+    bodyPr["@_vert"] = textBody.direction;
+  }
+  if (textBody.rotation) {
+    bodyPr["@_rot"] = toInt(textBody.rotation, 0);
+  }
+
+  if (textBody.autoFit === "shape") {
+    bodyPr["a:spAutoFit"] = {};
+  } else if (textBody.autoFit === "norm") {
+    bodyPr["a:normAutofit"] = {};
+  } else if (textBody.autoFit === "none") {
+    bodyPr["a:noAutofit"] = {};
+  }
+
   return {
-    "a:bodyPr": {
-      "@_anchor": textBody.verticalAlign || "t",
-      "@_wrap": textBody.wrap || "square",
-      "@_rtlCol": textBody.rtlCol ? "1" : "0",
-      "@_fromWordArt": textBody.fromWordArt ? "1" : "0",
-      "@_anchorCtr": textBody.anchorCtr ? "1" : "0",
-      "@_forceAA": textBody.forceAA ? "1" : "0",
-      "@_upright": textBody.upright ? "1" : "0",
-      "@_numCol": toInt(textBody.numCol, 1),
-      "@_lIns": toInt(textBody.leftInset, 45720),
-      "@_tIns": toInt(textBody.topInset, 22860),
-      "@_rIns": toInt(textBody.rightInset, 45720),
-      "@_bIns": toInt(textBody.bottomInset, 22860)
-    },
+    "a:bodyPr": bodyPr,
     "a:lstStyle": {},
     "a:p": paragraphs.length ? paragraphs : [{ "a:r": [{ "a:t": "" }], "a:endParaRPr": { "@_lang": "en-US" } }]
   };
