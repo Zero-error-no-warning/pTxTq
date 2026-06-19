@@ -322,4 +322,3 @@ await writeFile("html-output.pptx", bytes);
 - `svg` は `image/svg+xml` のまま埋め込みます。
 - `img` は `data:` URI の画像を埋め込めます。
 - CSS はインラインの `color`、`font-size`、`font-family`、`text-align` を中心に反映します。
-- CDN / script tag 版でも `pTxTq.htmlToPptxBuffer()` と `pTxTq.htmlToPptxBlob()` を利用できます。
