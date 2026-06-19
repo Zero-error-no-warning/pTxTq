@@ -144,6 +144,19 @@ const svg = await doc.renderSlide(0, { mode: "svg" });
 await writeFile("slide-1.svg", svg, "utf8");
 ```
 
+
+Render every slide to SVG:
+
+```js
+const svgs = await doc.renderSlides({ mode: "svg" });
+```
+
+Render selected slides by zero-based index:
+
+```js
+const titleAndSummary = await doc.renderSlides({ mode: "svg", indices: [0, 4] });
+```
+
 ### Render `pptx -> canvas` in Node.js
 
 ```js

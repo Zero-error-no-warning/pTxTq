@@ -145,6 +145,19 @@ const svg = await doc.renderSlide(0, { mode: "svg" });
 await writeFile("slide-1.svg", svg, "utf8");
 ```
 
+
+すべてのスライドを SVG にレンダリング:
+
+```js
+const svgs = await doc.renderSlides({ mode: "svg" });
+```
+
+0 始まりのインデックスで対象スライドを選んでレンダリング:
+
+```js
+const titleAndSummary = await doc.renderSlides({ mode: "svg", indices: [0, 4] });
+```
+
 ### Node.js で `pptx -> canvas`
 
 ```js
