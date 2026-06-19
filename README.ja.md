@@ -295,3 +295,31 @@ await PptxThemeDocument.load(source);
 
 公開の中心となる実装は `src/` 配下です。
 `scripts/`、`docs/`、サンプル deck などはローカル検証用で、主たる公開 API ではありません。
+
+### HTML タグから `.pptx` を作成する
+
+`htmlToPptxDocument()` / `htmlToPptxBuffer()` で、HTML 文字列から 1 枚のスライドを持つ `.pptx` を生成できます。
+`h1`〜`h6`、`p`、`div`、`li`、`span` はテキストボックスに変換し、`svg` は SVG 画像として PowerPoint のメディアパーツに埋め込むため、ベクターに近い再現性を維持できます。
+
+```js
+import { htmlToPptxBuffer } from "./src/index.js";
+import { writeFile } from "node:fs/promises";
+
+const bytes = await htmlToPptxBuffer(`
+  <h1 style="color:#3366cc">HTML to PPTX</h1>
+  <p>HTML タグから PowerPoint を生成します。</p>
+  <svg width="320" height="160" xmlns="http://www.w3.org/2000/svg">
+    <rect width="320" height="160" rx="24" fill="#f8d24a"/>
+    <circle cx="90" cy="80" r="48" fill="#3366cc"/>
+  </svg>
+`);
+
+await writeFile("html-output.pptx", bytes);
+```
+
+補足:
+
+- `svg` は `image/svg+xml` のまま埋め込みます。
+- `img` は `data:` URI の画像を埋め込めます。
+- CSS はインラインの `color`、`font-size`、`font-family`、`text-align` を中心に反映します。
+- CDN / script tag 版でも `pTxTq.htmlToPptxBuffer()` と `pTxTq.htmlToPptxBlob()` を利用できます。

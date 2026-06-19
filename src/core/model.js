@@ -2521,7 +2521,7 @@ export function createSlideSnapshot(slide) {
 async function resolveImageDataUris(elements) {
   const pending = [];
   for (const element of elements) {
-    if (element.type !== "image" || typeof element.dataUri !== "object" || typeof element.dataUri.then !== "function") {
+    if (element.type !== "image" || !element.dataUri || typeof element.dataUri !== "object" || typeof element.dataUri.then !== "function") {
       continue;
     }
     pending.push(
