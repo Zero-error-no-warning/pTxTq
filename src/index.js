@@ -1,6 +1,7 @@
-﻿import { PptxThemeDocument } from "./core/PptxDocument.js";
+import { PptxThemeDocument } from "./core/PptxDocument.js";
+import { htmlToPptxDocument, htmlToPptxBuffer } from "./htmlToPptx.js";
 
-export { PptxThemeDocument };
+export { PptxThemeDocument, htmlToPptxDocument, htmlToPptxBuffer };
 
 export async function loadPptx(source) {
   return PptxThemeDocument.load(source);
@@ -8,5 +9,7 @@ export async function loadPptx(source) {
 
 export default {
   PptxThemeDocument,
-  loadPptx
+  loadPptx,
+  htmlToPptxDocument,
+  htmlToPptxBuffer
 };

@@ -155,6 +155,31 @@ function createConnectorNode(element) {
   };
 }
 
+function buildBlipNode(element) {
+  const blip = element.relId ? { "@_r:embed": element.relId } : {};
+  if (element.svgRelId) {
+    blip["a:extLst"] = {
+      "a:ext": [
+        {
+          "@_uri": "{28A0092B-C50C-407E-A947-70E740481C1C}",
+          "a14:useLocalDpi": {
+            "@_xmlns:a14": "http://schemas.microsoft.com/office/drawing/2010/main",
+            "@_val": "0"
+          }
+        },
+        {
+          "@_uri": "{96DAC541-7B7A-43D3-8B79-37D633B846F1}",
+          "asvg:svgBlip": {
+            "@_xmlns:asvg": "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+            "@_r:embed": element.svgRelId
+          }
+        }
+      ]
+    };
+  }
+  return blip;
+}
+
 function createPictureNode(element) {
   return {
     "p:nvPicPr": {
@@ -171,7 +196,7 @@ function createPictureNode(element) {
       "p:nvPr": {}
     },
     "p:blipFill": {
-      "a:blip": element.relId ? { "@_r:embed": element.relId } : {},
+      "a:blip": buildBlipNode(element),
       "a:stretch": {
         "a:fillRect": {}
       }
@@ -406,9 +431,7 @@ function patchPictureNode(existingNode, element) {
 
   node["p:blipFill"] = node["p:blipFill"] || {};
   node["p:blipFill"]["a:blip"] = node["p:blipFill"]["a:blip"] || {};
-  if (element.relId) {
-    node["p:blipFill"]["a:blip"]["@_r:embed"] = element.relId;
-  }
+  node["p:blipFill"]["a:blip"] = buildBlipNode(element);
   node["p:blipFill"]["a:stretch"] = node["p:blipFill"]["a:stretch"] || {
     "a:fillRect": {}
   };
@@ -618,36 +641,19 @@ function buildRelationshipsXml(relationships) {
 function upsertImageRelationship(slide, slidePath, relationships, usedIds) {
   let counter = 1000;
 
-  for (const element of slide.elements || []) {
-    if (element.type !== "image") {
-      continue;
-    }
-
-    let targetPart = element.imagePath;
-    if (!targetPart && element.dataUri) {
-      const ext = mapMimeToExt(element.mimeType);
-      targetPart = `ppt/media/generated-${slide.index + 1}-${element.id}.${ext}`;
-      element.imagePath = targetPart;
-    }
-
-    if (!targetPart) {
-      continue;
-    }
-
-    let relId = element.relId;
-    if (!relId || usedIds.has(relId)) {
-      do {
-        relId = `rId${counter}`;
-        counter += 1;
-      } while (usedIds.has(relId));
-      element.relId = relId;
-    }
-
+  const nextRelId = () => {
+    let relId;
+    do {
+      relId = `rId${counter}`;
+      counter += 1;
+    } while (usedIds.has(relId));
     usedIds.add(relId);
+    return relId;
+  };
 
-    const existing = relationships.find((r) => r.id === relId);
+  const upsert = (relId, targetPart) => {
     const target = relativeTarget(slidePath, targetPart);
-
+    const existing = relationships.find((r) => r.id === relId);
     if (existing) {
       existing.type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
       existing.target = target;
@@ -660,9 +666,50 @@ function upsertImageRelationship(slide, slidePath, relationships, usedIds) {
         targetMode: "Internal"
       });
     }
+  };
+
+  for (const element of slide.elements || []) {
+    if (element.type !== "image") {
+      continue;
+    }
+
+    let targetPart = element.imagePath;
+    if (!targetPart && element.dataUri) {
+      const ext = mapMimeToExt(element.mimeType);
+      targetPart = `ppt/media/generated-${slide.index + 1}-${element.id}.${ext}`;
+      element.imagePath = targetPart;
+    }
+
+    if (targetPart) {
+      let relId = element.relId;
+      if (!relId || usedIds.has(relId)) {
+        relId = nextRelId();
+        element.relId = relId;
+      } else {
+        usedIds.add(relId);
+      }
+      upsert(relId, targetPart);
+    }
+
+    let svgTargetPart = element.svgImagePath;
+    if (!svgTargetPart && element.svgDataUri) {
+      const ext = mapMimeToExt(element.svgMimeType || "image/svg+xml");
+      svgTargetPart = `ppt/media/generated-${slide.index + 1}-${element.id}-svg.${ext}`;
+      element.svgImagePath = svgTargetPart;
+    }
+
+    if (svgTargetPart) {
+      let svgRelId = element.svgRelId;
+      if (!svgRelId || usedIds.has(svgRelId)) {
+        svgRelId = nextRelId();
+        element.svgRelId = svgRelId;
+      } else {
+        usedIds.add(svgRelId);
+      }
+      upsert(svgRelId, svgTargetPart);
+    }
   }
 }
-
 export async function writeModelToPptx(openXmlPackage, model, options = {}) {
   const outputPackage = options.inPlace ? openXmlPackage : await openXmlPackage.clone();
 
@@ -674,12 +721,6 @@ export async function writeModelToPptx(openXmlPackage, model, options = {}) {
     }
 
     const slidePath = slide.sourcePath || `ppt/slides/slide${slide.index + 1}.xml`;
-    const preserveSource = options.preserveSourceXml !== false;
-    const slideXml = preserveSource
-      ? buildSlideXmlPreservingSource(slide)
-      : buildSlideXml(slide);
-    outputPackage.writeXml(slidePath, slideXml);
-
     const relationships = ensureArray(slide.sourceRelationships).map((rel) => ({
       id: rel.id,
       type: rel.type,
@@ -690,13 +731,27 @@ export async function writeModelToPptx(openXmlPackage, model, options = {}) {
     const usedIds = new Set(relationships.map((r) => r.id));
     upsertImageRelationship(slide, slidePath, relationships, usedIds);
 
+    const preserveSource = options.preserveSourceXml !== false;
+    const slideXml = preserveSource
+      ? buildSlideXmlPreservingSource(slide)
+      : buildSlideXml(slide);
+    outputPackage.writeXml(slidePath, slideXml);
+
     for (const element of slide.elements || []) {
-      if (element.type !== "image" || !element.imagePath || !element.dataUri) {
+      if (element.type !== "image") {
         continue;
       }
-      const binary = decodeDataUri(element.dataUri);
-      if (binary) {
-        outputPackage.writeBinary(element.imagePath, binary);
+      if (element.imagePath && element.dataUri) {
+        const binary = decodeDataUri(element.dataUri);
+        if (binary) {
+          outputPackage.writeBinary(element.imagePath, binary);
+        }
+      }
+      if (element.svgImagePath && element.svgDataUri) {
+        const svgBinary = decodeDataUri(element.svgDataUri);
+        if (svgBinary) {
+          outputPackage.writeBinary(element.svgImagePath, svgBinary);
+        }
       }
     }
 
