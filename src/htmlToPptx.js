@@ -8,6 +8,7 @@ const SLIDE_H = 5143500;
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 const DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 const SLIDE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+const TRANSPARENT_PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 function b64(s) { return typeof Buffer !== "undefined" ? Buffer.from(s, "utf8").toString("base64") : btoa(unescape(encodeURIComponent(s))); }
 function stripTags(s) { return String(s || "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
@@ -29,7 +30,7 @@ function createTextElement(id, text, box, style = {}) {
 function createSvgElement(id, svg, box) {
   const width = px(attr(svg, "width"), box.w);
   const height = px(attr(svg, "height"), box.h);
-  return { id, type: "image", name: `HTML SVG ${id}`, x: pxToEmu(box.x), y: pxToEmu(box.y), cx: pxToEmu(box.w || width), cy: pxToEmu(box.h || height), mimeType: "image/svg+xml", dataUri: `data:image/svg+xml;base64,${b64(svg)}` };
+  return { id, type: "image", name: `HTML SVG ${id}`, x: pxToEmu(box.x), y: pxToEmu(box.y), cx: pxToEmu(box.w || width), cy: pxToEmu(box.h || height), mimeType: "image/png", dataUri: TRANSPARENT_PNG_DATA_URI, svgMimeType: "image/svg+xml", svgDataUri: `data:image/svg+xml;base64,${b64(svg)}` };
 }
 function createImageElement(id, src, box) {
   const mimeType = src.match(/^data:([^;]+);base64,/)?.[1] || "image/png";
